@@ -23,8 +23,8 @@ UNIVERSE = [
     "ASII.JK", "CTRA.JK", "BSDE.JK", "SMRA.JK", "PWON.JK", "SMGR.JK", "INTP.JK"
 ]
 
-# Import logika inti dari dashboard
-from dashboard import (
+# Import logika inti dari engine
+from engine import (
     get_market_data, calculate_indicators,
     penetration_engine, risk_check, INITIAL_CAPITAL
 )

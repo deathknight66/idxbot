@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 import logging
-from dashboard import (
+from engine import (
     UNIVERSE, get_market_data, calculate_indicators,
     penetration_engine, risk_check
 )
