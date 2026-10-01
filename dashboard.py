@@ -128,7 +128,30 @@ st.title("🤖 IDXBOT Quant Terminal")
 st.markdown(f"**Mode:** {mode}")
 st.write("---")
 
+
+def load_portfolio():
+    os.makedirs("data", exist_ok=True)
+    with sqlite3.connect("data/paper.db") as conn:
+        conn.execute('''CREATE TABLE IF NOT EXISTS positions (symbol TEXT PRIMARY KEY, shares INTEGER, entry REAL, stop REAL, entry_date TEXT, last_checked TEXT, cost REAL)''')
+        conn.execute('''CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v REAL)''')
+        if not conn.execute("SELECT 1 FROM kv WHERE k='cash'").fetchone():
+            conn.execute("INSERT INTO kv VALUES('cash', ?)", (INITIAL_CAPITAL,))
+            conn.commit()
+            
+        portfolio = pd.read_sql("SELECT * FROM positions", conn)
+        cash_row = conn.execute("SELECT v FROM kv WHERE k='cash'").fetchone()
+        cash = float(cash_row[0]) if cash_row else INITIAL_CAPITAL
+    return portfolio, cash
+
+def load_trade_history():
+    os.makedirs("data", exist_ok=True)
+    with sqlite3.connect("data/paper.db") as conn:
+        conn.execute('''CREATE TABLE IF NOT EXISTS orders (id INTEGER PRIMARY KEY, signal_date TEXT, symbol TEXT, side TEXT, lots INTEGER, ref_price REAL, limit_price REAL, status TEXT, fill_price REAL, fill_date TEXT, reason TEXT, pnl REAL)''')
+        trades = pd.read_sql("SELECT * FROM orders", conn)
+    return trades
+
 portfolio, cash = load_portfolio()
+
 total_equity = cash + (portfolio['cost'].sum() if not portfolio.empty else 0)
 
 if menu == "🏠 Dashboard (Portfolio)":
