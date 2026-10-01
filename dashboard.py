@@ -583,71 +583,45 @@ class ExecutionAdapter:
 # ============================================================
 
 def scan_universe():
+    import concurrent.futures
 
     results = []
-
     errors = []
 
-    for symbol in UNIVERSE:
-
+    def process_symbol(symbol):
         try:
-
             df = get_market_data(symbol)
-
             df = calculate_indicators(df)
-
             universe = universe_score(df)
-
             penetration = penetration_engine(df)
-
             latest = df.iloc[-1]
 
-            result = {
-
+            return {
                 "symbol": symbol.replace(".JK", ""),
-
                 "price": latest["close"],
-
                 "liquidity": universe["liquidity"],
-
                 "activity": universe["activity"],
-
                 "sideways": universe["sideways"],
-
-                "universe_score":
-                    universe["universe_score"],
-
-                "entry_score":
-                    penetration["entry_score"],
-
-                "signal":
-                    penetration["signal"],
-
-                "support":
-                    penetration["support"],
-
-                "resistance":
-                    penetration["resistance"],
-
-                "rsi":
-                    latest["rsi"],
-
-                "volume_ratio":
-                    latest["volume_ratio"],
-
-            }
-
-            results.append(result)
-
+                "universe_score": universe["universe_score"],
+                "entry_score": penetration["entry_score"],
+                "signal": penetration["signal"],
+                "support": penetration["support"],
+                "resistance": penetration["resistance"],
+                "rsi": latest["rsi"],
+                "volume_ratio": latest["volume_ratio"],
+            }, None
         except Exception as e:
+            logger.error(f"{symbol}: {traceback.format_exc()}")
+            return None, f"{symbol}: {str(e)}"
 
-            errors.append(
-                f"{symbol}: {str(e)}"
-            )
-
-            logger.error(
-                f"{symbol}: {traceback.format_exc()}"
-            )
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        futures = {executor.submit(process_symbol, sym): sym for sym in UNIVERSE}
+        for future in concurrent.futures.as_completed(futures):
+            res, err = future.result()
+            if res:
+                results.append(res)
+            if err:
+                errors.append(err)
 
     return pd.DataFrame(results), errors
 
@@ -1016,6 +990,42 @@ try:
         st.subheader("Aktif / Open Positions")
         st.dataframe(portfolio, use_container_width=True)
         
+        # --- CLOSE POSITION FEATURE ---
+        if not portfolio.empty:
+            st.write("---")
+            st.write("**Close Position (Sell)**")
+            sell_col1, sell_col2 = st.columns([3, 1])
+            sell_symbol = sell_col1.selectbox("Pilih saham untuk dijual", portfolio["symbol"].tolist())
+            if sell_col2.button("FORCE SELL"):
+                try:
+                    # Ambil harga terkini untuk kalkulasi PnL
+                    latest_df = get_market_data(sell_symbol, period="1mo", interval="1d")
+                    current_price = latest_df.iloc[-1]['close']
+                    
+                    pos_row = portfolio[portfolio["symbol"] == sell_symbol].iloc[0]
+                    entry_price = pos_row["entry"]
+                    shares = pos_row["shares"]
+                    
+                    pnl = (current_price - entry_price) * shares
+                    
+                    from datetime import datetime
+                    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    
+                    with sqlite3.connect("data/paper.db") as conn:
+                        # Masukkan SELL ke order dengan PnL
+                        conn.execute(
+                            "INSERT INTO orders (signal_date, symbol, side, lots, ref_price, status, pnl) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                            (now, sell_symbol, "SELL", shares // 100, current_price, "FILLED", pnl)
+                        )
+                        # Hapus posisi
+                        conn.execute("DELETE FROM positions WHERE symbol=?", (sell_symbol,))
+                    
+                    st.success(f"Berhasil menjual {sell_symbol} di Rp{current_price:,.0f}. Realized PnL: Rp{pnl:,.0f}")
+                    st.rerun()
+                except Exception as ex:
+                    st.error(f"Gagal menjual {sell_symbol}: {ex}")
+        
+        st.write("---")
         st.subheader("Trade History (Closed & Filled Orders)")
         st.dataframe(trades.sort_values("id", ascending=False).head(20), use_container_width=True)
 
