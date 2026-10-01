@@ -160,7 +160,7 @@ if view_mode == "🏠 Trading Terminal":
                     display_df = scan_df.copy().sort_values("entry_score", ascending=False)
                     def color_signal(val):
                         return 'color: #00ff88; font-weight: bold;' if val == 'ENTRY CANDIDATE' else 'color: gray'
-                    st.dataframe(display_df.style.applymap(color_signal, subset=['signal']), height=250, use_container_width=True)
+                    st.dataframe(display_df.style.map(color_signal, subset=['signal']), height=250, use_container_width=True)
                     candidates = scan_df[scan_df['signal'] == 'ENTRY CANDIDATE']['symbol'].tolist()
                     all_symbols = scan_df['symbol'].tolist()
             except Exception as e:
