@@ -329,42 +329,39 @@ left, center, right = st.columns([1, 4, 1.4], gap="small")
 # LEFT — Watchlist
 # ══════════════════════════
 with left:
-    st.markdown("<div style='padding:8px 4px;font-size:11px;color:#787b86;font-weight:700;"
-                "border-bottom:1px solid #2A2E39'>WATCHLIST</div>", unsafe_allow_html=True)
+    st.markdown("<div style='padding:6px 4px;font-size:11px;color:#787b86;font-weight:700;"
+                "border-bottom:1px solid #2A2E39;margin-bottom:4px'>WATCHLIST</div>",
+                unsafe_allow_html=True)
     
+    # Single radio for symbol selection — much cleaner than HTML+button
+    sym_choice = st.radio(
+        "", WATCHLIST,
+        index=WATCHLIST.index(selected) if selected in WATCHLIST else 0,
+        key="wl_radio",
+        label_visibility="collapsed"
+    )
+    if sym_choice != selected:
+        st.session_state["sym"] = sym_choice
+        st.rerun()
+
+    # Price overlay next to radio labels via markdown
     for sym in WATCHLIST:
         price, pct = load_price(sym + ".JK")
-        is_active = sym == selected
         pct_color = "#26a69a" if pct >= 0 else "#ef5350"
         pct_sign  = "+" if pct >= 0 else ""
-        active_style = "background:#1a3a5c; border-left:3px solid #2962FF; border-radius:4px;" if is_active else ""
-        
-        # Check bot signal for this symbol
-        signal_badge = ""
-        try:
-            df_wl = load_chart(sym + ".JK", "3mo")
-            r_wl = risk_check(df_wl, capital=equity)
-            if r_wl.get('approved'):
-                signal_badge = "<span style='color:#26a69a;font-size:9px'>● BUY</span>"
-        except:
-            pass
-        
+        is_active = sym == selected
+        border = "border-left:3px solid #2962FF;" if is_active else "border-left:3px solid transparent;"
+        bg = "background:#1a3a5c;" if is_active else ""
         st.markdown(f"""
-<div class="wl-item" style="{active_style}">
-  <div>
-    <span class="wl-sym">{sym}</span>
-    {signal_badge}
-  </div>
-  <div style="text-align:right">
-    <div class="wl-price">{price:,.0f}</div>
-    <div style="color:{pct_color};font-size:11px">{pct_sign}{pct:.2f}%</div>
+<div style='display:flex;justify-content:space-between;align-items:center;
+            padding:3px 6px;margin:-28px 0 2px 20px;
+            {bg}{border}border-radius:3px;pointer-events:none'>
+  <span style='font-size:11px;color:#787b86'></span>
+  <div style='text-align:right'>
+    <span style='font-size:12px;font-weight:700;color:#D1D4DC'>{price:,.0f}</span>
+    <span style='font-size:10px;color:{pct_color};margin-left:4px'>{pct_sign}{pct:.2f}%</span>
   </div>
 </div>""", unsafe_allow_html=True)
-        
-        if st.button(sym, key=f"wl_{sym}", use_container_width=True,
-                     help=f"Switch to {sym}"):
-            st.session_state["sym"] = sym
-            st.rerun()
 
     st.markdown("<div style='padding:8px 4px;font-size:11px;color:#787b86;font-weight:700;"
                 "border-top:1px solid #2A2E39;margin-top:8px'>BOT SCAN</div>", unsafe_allow_html=True)
@@ -733,9 +730,16 @@ with tab_ord:
     if orders.empty:
         st.info("Belum ada order.")
     else:
-        disp = orders[['ts','symbol','side','lots','price','status','reason','pnl']].copy()
-        disp['price'] = disp['price'].apply(lambda x: f"Rp{x:,.0f}")
-        disp['pnl']   = disp['pnl'].apply(lambda x: f"+Rp{x:,.0f}" if x >= 0 else f"-Rp{abs(x):,.0f}")
+        # Only show columns that exist
+        want_cols = ['ts','symbol','side','lots','price','status','reason','pnl']
+        show_cols = [c for c in want_cols if c in orders.columns]
+        disp = orders[show_cols].copy()
+        if 'price' in disp.columns:
+            disp['price'] = disp['price'].apply(lambda x: f"Rp{float(x):,.0f}" if pd.notna(x) else "-")
+        if 'pnl' in disp.columns:
+            disp['pnl'] = disp['pnl'].apply(
+                lambda x: (f"+Rp{float(x):,.0f}" if float(x) >= 0 else f"-Rp{abs(float(x)):,.0f}") if pd.notna(x) else "-"
+            )
         st.dataframe(disp, use_container_width=True, height=200)
 
 with tab_sig:
