@@ -17,17 +17,23 @@ INITIAL_CAPITAL = 100_000_000
 
 # Universe awal.
 # Nanti bisa diperluas menjadi seluruh saham BEI.
+# Universe saham LQ45 / Big Caps Indonesia
 UNIVERSE = [
-    "BBCA.JK",
-    "BBRI.JK",
-    "BMRI.JK",
-    "BBNI.JK",
-    "TLKM.JK",
-    "ASII.JK",
-    "ICBP.JK",
-    "INDF.JK",
-    "ANTM.JK",
-    "MDKA.JK",
+    # Banking
+    "BBCA.JK", "BBRI.JK", "BMRI.JK", "BBNI.JK", "BRIS.JK", "ARTO.JK",
+    # Mining & Energy
+    "ADRO.JK", "PTBA.JK", "ITMG.JK", "UNTR.JK", "PGAS.JK", "MEDC.JK",
+    "AKRA.JK", "HRUM.JK", "INDY.JK",
+    # Basic Materials
+    "ANTM.JK", "MDKA.JK", "INCO.JK", "TINS.JK", "BRPT.JK", "TPIA.JK", "AMMN.JK",
+    # Consumer
+    "ICBP.JK", "INDF.JK", "UNVR.JK", "MYOR.JK", "KLBF.JK", "AMRT.JK", "CPIN.JK",
+    # Telco & Tech
+    "TLKM.JK", "ISAT.JK", "EXCL.JK", "GOTO.JK", "BUKA.JK",
+    # Infrastructure & Construction
+    "JSMR.JK", "PTPP.JK", "ADHI.JK", "WIKA.JK", "WSKT.JK",
+    # Others (Auto, Property, etc)
+    "ASII.JK", "CTRA.JK", "BSDE.JK", "SMRA.JK", "PWON.JK", "SMGR.JK", "INTP.JK"
 ]
 
 MIN_AVG_VALUE = 5_000_000_000

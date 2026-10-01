@@ -3,9 +3,27 @@ import logging
 import sqlite3
 from datetime import datetime
 
+UNIVERSE = [
+    # Banking
+    "BBCA.JK", "BBRI.JK", "BMRI.JK", "BBNI.JK", "BRIS.JK", "ARTO.JK",
+    # Mining & Energy
+    "ADRO.JK", "PTBA.JK", "ITMG.JK", "UNTR.JK", "PGAS.JK", "MEDC.JK",
+    "AKRA.JK", "HRUM.JK", "INDY.JK",
+    # Basic Materials
+    "ANTM.JK", "MDKA.JK", "INCO.JK", "TINS.JK", "BRPT.JK", "TPIA.JK", "AMMN.JK",
+    # Consumer
+    "ICBP.JK", "INDF.JK", "UNVR.JK", "MYOR.JK", "KLBF.JK", "AMRT.JK", "CPIN.JK",
+    # Telco & Tech
+    "TLKM.JK", "ISAT.JK", "EXCL.JK", "GOTO.JK", "BUKA.JK",
+    # Infrastructure & Construction
+    "JSMR.JK", "PTPP.JK", "ADHI.JK", "WIKA.JK", "WSKT.JK",
+    # Others (Auto, Property, etc)
+    "ASII.JK", "CTRA.JK", "BSDE.JK", "SMRA.JK", "PWON.JK", "SMGR.JK", "INTP.JK"
+]
+
 # Import logika inti dari dashboard
 from dashboard import (
-    UNIVERSE, get_market_data, calculate_indicators,
+    get_market_data, calculate_indicators,
     penetration_engine, risk_check, INITIAL_CAPITAL
 )
 
