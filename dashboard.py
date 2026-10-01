@@ -52,11 +52,10 @@ logger = logging.getLogger("trading_bot")
 # MARKET DATA
 # ============================================================
 
-@st.cache_data(ttl=60)
-def get_market_data(symbol, period="3mo", interval="1d"):
+@st.cache_data(ttl=3600)
+def get_market_data(symbol, period="3y", interval="1d"):
     """
-    Mengambil market data.
-    Untuk prototype menggunakan Yahoo Finance sebagai sumber data.
+    Mengambil market data 3 tahun terakhir dari Yahoo Finance.
     """
 
     try:
@@ -944,37 +943,43 @@ if not scan_df.empty:
 
 # ============================================================
 # PAGE 3
-# PNL MONITORING
+# PNL MONITORING (REAL DATABASE)
 # ============================================================
 
 st.header("3. PnL Monitoring")
 
-# Prototype portfolio.
-# Nanti data ini diganti dari execution/order database.
+# Membaca riwayat order sungguhan dari SQLite Paper Trading
+import sqlite3
+from pathlib import Path
+import os
 
-portfolio = pd.DataFrame(
-    [
-        {
-            "symbol": "BBCA",
-            "quantity": 0,
-            "entry": 0,
-            "current": 0,
-            "pnl": 0,
-        }
-    ]
-)
+db_path = "data/paper.db"
+os.makedirs("data", exist_ok=True)
 
-total_pnl = portfolio["pnl"].sum()
+try:
+    with sqlite3.connect(db_path) as conn:
+        portfolio = pd.read_sql("SELECT * FROM positions", conn)
+        trades = pd.read_sql("SELECT * FROM trades", conn)
+        
+    if portfolio.empty and trades.empty:
+        st.info("Belum ada posisi paper trading. Jalankan perintah 'python main.py daily' di terminal untuk memulai.")
+    else:
+        total_pnl = trades["pnl"].sum() if not trades.empty else 0
+        open_capital = portfolio["cost"].sum() if not portfolio.empty else 0
+        
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Realized PnL (Closed Trades)", f"Rp {total_pnl:,.0f}")
+        c2.metric("Total Open Capital", f"Rp {open_capital:,.0f}")
+        c3.metric("Total Executed Trades", len(trades))
+        
+        st.subheader("Aktif / Open Positions")
+        st.dataframe(portfolio, use_container_width=True)
+        
+        st.subheader("Trade History (Closed)")
+        st.dataframe(trades.sort_values("exit_date", ascending=False).head(20), use_container_width=True)
 
-st.metric(
-    "Total PnL",
-    f"Rp {total_pnl:,.0f}"
-)
-
-st.dataframe(
-    portfolio,
-    use_container_width=True,
-)
+except Exception as e:
+    st.info("Database paper.db belum terinisialisasi. Coba jalankan `python main.py daily` di terminal untuk mulai trading otomatis.")
 
 
 # ============================================================
