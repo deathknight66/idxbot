@@ -36,8 +36,53 @@ def run_cycle():
         import pandas as pd
         pos_df = pd.read_sql("SELECT * FROM positions", conn)
         active_symbols = pos_df["symbol"].tolist() if not pos_df.empty else []
-    
-    # SCAN & BUY LOGIC
+        
+    # ========================================================
+    # 1. AUTO-SELL LOGIC (Pantau Stop Loss & Take Profit)
+    # ========================================================
+    if not pos_df.empty:
+        logger.info(f"Memantau {len(pos_df)} posisi aktif untuk Exit...")
+        for _, pos in pos_df.iterrows():
+            symbol = pos['symbol']
+            entry = pos['entry']
+            stop_loss = pos['stop']
+            shares = pos['shares']
+            
+            # Hitung take profit dinamis (Risk:Reward = 1:2)
+            risk_amount = entry - stop_loss
+            take_profit = entry + (risk_amount * 2)
+            
+            try:
+                df = get_market_data(symbol, period="1mo")
+                current_price = df.iloc[-1]['close']
+                
+                # Cek Kondisi Exit
+                reason = None
+                if current_price <= stop_loss:
+                    reason = "STOP LOSS HIT"
+                elif current_price >= take_profit:
+                    reason = "TAKE PROFIT HIT"
+                    
+                if reason:
+                    pnl = (current_price - entry) * shares
+                    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    
+                    with sqlite3.connect(DB_PATH) as conn:
+                        conn.execute(
+                            "INSERT INTO orders (signal_date, symbol, side, lots, ref_price, status, reason, pnl) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                            (now, symbol, "SELL", shares // 100, current_price, "FILLED", reason, pnl)
+                        )
+                        conn.execute("DELETE FROM positions WHERE symbol=?", (symbol,))
+                    logger.warning(f"[{symbol}] AUTO-SELL DIEKSEKUSI: {reason}. Terjual @ Rp {current_price:,.0f} | PnL: Rp {pnl:,.0f}")
+                else:
+                    logger.info(f"[{symbol}] Hold. Current: {current_price:,.0f} | SL: {stop_loss:,.0f} | TP: {take_profit:,.0f}")
+            except Exception as e:
+                logger.error(f"[{symbol}] Error pantau posisi: {e}")
+
+    # ========================================================
+    # 2. AUTO-BUY LOGIC (Scan Sinyal Baru)
+    # ========================================================
+    logger.info("Mencari kandidat sinyal Entry baru...")
     for symbol in UNIVERSE:
         if symbol in active_symbols:
             continue # Sudah punya barangnya, lewati
@@ -59,14 +104,16 @@ def run_cycle():
                     
                     with sqlite3.connect(DB_PATH) as conn:
                         conn.execute(
-                            "INSERT INTO orders (signal_date, symbol, side, lots, ref_price, status) VALUES (?, ?, ?, ?, ?, ?)",
-                            (now, symbol, "BUY", risk['lots'], risk['entry'], "FILLED")
+                            "INSERT INTO orders (signal_date, symbol, side, lots, ref_price, status, reason) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                            (now, symbol, "BUY", risk['lots'], risk['entry'], "FILLED", "ENTRY CANDIDATE")
                         )
                         conn.execute(
                             "INSERT OR REPLACE INTO positions (symbol, shares, entry, stop, entry_date, cost) VALUES (?, ?, ?, ?, ?, ?)",
                             (symbol, shares, risk['entry'], risk['stop_loss'], now, risk['estimated_value'])
                         )
                     logger.info(f"[{symbol}] AUTO-BUY DIEKSEKUSI: {risk['lots']} lot @ Rp {risk['entry']:,.0f}")
+                    # Update active_symbols agar tidak dibeli lagi di iterasi yang sama
+                    active_symbols.append(symbol)
                 else:
                     logger.warning(f"[{symbol}] Sinyal ditolak oleh Risk Engine: {risk['reason']}")
                     
