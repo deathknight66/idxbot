@@ -211,6 +211,10 @@ except Exception as e:
 # TOP METRICS
 # ============================================================
 
+if scan_df.empty:
+    st.error("DEBUG: Scanner returned empty dataframe! Errors:")
+    st.write(errors[:5])
+
 if not scan_df.empty:
 
     candidates = scan_df[
