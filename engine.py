@@ -151,6 +151,8 @@ def calculate_indicators(df):
     # Moving averages
     df["ma20"] = df["close"].rolling(20).mean()
     df["ma50"] = df["close"].rolling(50).mean()
+    df["ma200"] = df["close"].rolling(200).mean()
+    df["volume_ma20"] = df["volume"].rolling(20).mean()
 
     # Daily return
     df["return"] = df["close"].pct_change()
@@ -331,6 +333,27 @@ def sideways_score(df):
     return max(0, min(100, score))
 
 
+
+def detect_regime(df):
+    """
+    Mendeteksi Market Regime: BULL, BEAR, atau SIDEWAYS.
+    """
+    if len(df) < 200 or 'ma200' not in df.columns:
+        return "SIDEWAYS" # Default aman
+        
+    last = df.iloc[-1]
+    
+    if pd.isna(last['ma200']):
+        return "SIDEWAYS"
+        
+    if last['close'] > last['ma50'] and last['ma50'] > last['ma200']:
+        return "BULL"
+    elif last['close'] < last['ma50'] and last['ma50'] < last['ma200']:
+        return "BEAR"
+    else:
+        return "SIDEWAYS"
+
+
 def universe_score(df):
 
     liquidity = liquidity_score(df)
@@ -366,7 +389,74 @@ def calculate_range(df):
     return support, resistance
 
 
+
+def signal_engine(df):
+    """
+    Signal Engine yang beradaptasi dengan Market Regime.
+    Menggantikan Penetration Engine yang lama.
+    """
+    if len(df) < 200:
+        return {"signal": "WAIT", "reason": "Data tidak cukup (butuh 200 baris)"}
+
+    regime = detect_regime(df)
+    last = df.iloc[-1]
+    prev = df.iloc[-2]
+    
+    score = 0
+    reason = []
+    
+    if regime == "BULL":
+        # Strategy A: Trend Following / Breakout / Momentum
+        if last['close'] > last['ma20']:
+            score += 30
+            reason.append("Harga di atas MA20 (Trend Kuat)")
+            
+        if last['close'] > prev['bb_upper'] and last['volume'] > last['volume_ma20'] * 1.5:
+            score += 40
+            reason.append("Breakout BB Upper dengan Volume Tinggi")
+            
+        if last['rsi'] > 50 and last['rsi'] < 75:
+            score += 30
+            reason.append("RSI Momentum Bullish")
+            
+    elif regime == "SIDEWAYS":
+        # Strategy B: Mean Reversion / Range Trading
+        if last['close'] < last['bb_lower']:
+            score += 40
+            reason.append("Oversold di BB Lower (Mean Reversion)")
+            
+        if last['rsi'] < 35:
+            score += 30
+            reason.append("RSI Oversold")
+            
+        if last['close'] > last['bb_lower'] and prev['close'] <= prev['bb_lower']:
+            score += 30
+            reason.append("Rebound dari BB Lower")
+            
+    elif regime == "BEAR":
+        # Strategy C: Defensive / Cash
+        # Terlalu berbahaya untuk long, butuh konfirmasi super kuat (Bottom Fishing ekstrem)
+        if last['rsi'] < 20 and last['close'] < last['bb_lower'] * 0.95:
+            score += 50
+            reason.append("Extreme Oversold di Bear Market (High Risk)")
+        else:
+            return {"signal": "WAIT", "reason": f"Regime BEAR: Defensive (Cash is King)"}
+
+    # Liquidity Check (berlaku untuk semua regime)
+    if last['volume'] * last['close'] < MIN_AVG_VALUE:
+        score -= 50
+        reason.append("Likuiditas Terlalu Rendah")
+
+    if score >= 80:
+        return {"signal": "ENTRY CANDIDATE", "reason": f"Regime {regime} | " + " + ".join(reason)}
+    else:
+        return {"signal": "WAIT", "reason": f"Regime {regime} | Score {score}/80"}
+
+
 def penetration_engine(df):
+    return signal_engine(df) # Redirect old calls
+
+# def OLD_penetration_engine(df):
 
     latest = df.iloc[-1]
 
