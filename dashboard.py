@@ -18,25 +18,39 @@ def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
 def show_login_page():
-    st.title("IDXBot Authentication")
+    st.title("🛡️ IDXBot Command Center")
+    st.markdown("Silakan masuk ke akunmu untuk mengakses mesin trading.")
     
+    os.makedirs("data", exist_ok=True)
+    with sqlite3.connect("data/paper.db") as conn:
+        conn.execute('''CREATE TABLE IF NOT EXISTS users (
+            username TEXT PRIMARY KEY,
+            password_hash TEXT,
+            created_at TEXT
+        )''')
+        
+        try:
+            conn.execute("INSERT OR IGNORE INTO users (username, password_hash, created_at) VALUES (?, ?, ?)",
+                         ("deathknight666", hash_password("Xnunxer123*"), datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+            conn.commit()
+        except:
+            pass
+            
     with st.form("login_form"):
         username = st.text_input("Username")
         password = st.text_input("Password", type="password")
         submit = st.form_submit_button("Login")
         
         if submit:
-            try:
-                from engine import check_login
-                if check_login(username, hash_password(password)):
+            with sqlite3.connect("data/paper.db") as conn:
+                user = conn.execute("SELECT password_hash FROM users WHERE username=?", (username,)).fetchone()
+                if user and user[0] == hash_password(password):
                     st.session_state["logged_in"] = True
                     st.session_state["username"] = username
                     st.success("Login successful!")
                     st.rerun()
                 else:
                     st.error("Invalid credentials")
-            except Exception as e:
-                st.error(f"DB Error: {str(e)}")
 
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
