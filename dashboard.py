@@ -574,36 +574,6 @@ st.table(health)
 
 
 # ============================================================
-# ERROR MONITOR
-# ============================================================
-
-st.header("5. Error Monitoring")
-
-if errors:
-
-    for error in errors:
-
-        st.error(error)
-
-else:
-
-    st.success(
-        "No scanner errors detected."
-    )
-
-
-# ============================================================
-# FOOTER
-# ============================================================
-
-st.divider()
-
-st.caption(
-    f"Last update: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-)
-
-
-# ============================================================
 # PAGE 4
 # STRATEGY TESTER (BACKTEST)
 # ============================================================
@@ -636,3 +606,10 @@ with st.expander("🧪 Buka Panel Strategy Tester (Klik di Sini)"):
                     st.error("Gagal mendapatkan data.")
             except Exception as e:
                 st.error(f"Error saat backtest: {e}")
+
+
+# ============================================================
+# FOOTER
+# ============================================================
+st.divider()
+st.caption(f"Last update: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
