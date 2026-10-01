@@ -80,6 +80,10 @@ st.markdown(
 
 from engine import *
 
+@st.cache_data(ttl=300)
+def scan_universe_cached():
+    return scan_universe()
+
 @st.cache_data(ttl=60)
 def get_market_data_cached(symbol, period='3y', interval='1d'):
     import engine
@@ -172,7 +176,7 @@ elif menu == "📡 Signals (Scanner)":
     st.header("Multi-Strategy Scanner")
     with st.spinner("Scanning universe..."):
         try:
-            scan_df, errors = scan_universe()
+            scan_df, errors = scan_universe_cached()
             if scan_df.empty:
                 st.error("DEBUG: Scanner returned empty dataframe! Errors:")
                 st.write(errors[:5])
