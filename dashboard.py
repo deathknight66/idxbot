@@ -926,6 +926,37 @@ if not scan_df.empty:
             )
 
             st.table(risk_df)
+            
+            # --- REAL EXECUTION INTEGRATION ---
+            if st.button(f"EXECUTE BUY {symbol} (Paper Trade)"):
+                try:
+                    import sqlite3
+                    from datetime import datetime
+                    with sqlite3.connect("data/paper.db") as conn:
+                        conn.execute('''CREATE TABLE IF NOT EXISTS orders(
+                            id INTEGER PRIMARY KEY AUTOINCREMENT, signal_date TEXT, symbol TEXT,
+                            side TEXT, lots INTEGER, ref_price REAL, limit_price REAL,
+                            status TEXT DEFAULT 'PENDING', fill_price REAL, fill_date TEXT,
+                            reason TEXT, pnl REAL)''')
+                        conn.execute('''CREATE TABLE IF NOT EXISTS positions(
+                            symbol TEXT PRIMARY KEY, shares INTEGER, entry REAL, stop REAL,
+                            entry_date TEXT, last_checked TEXT, cost REAL)''')
+                        
+                        # Masukkan ke tabel orders
+                        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        conn.execute(
+                            "INSERT INTO orders (signal_date, symbol, side, lots, ref_price, status) VALUES (?, ?, ?, ?, ?, ?)",
+                            (now, symbol, "BUY", risk['lots'], risk['entry'], "FILLED")
+                        )
+                        # Masukkan ke posisi
+                        shares = risk['lots'] * 100
+                        conn.execute(
+                            "INSERT OR REPLACE INTO positions (symbol, shares, entry, stop, entry_date, cost) VALUES (?, ?, ?, ?, ?, ?)",
+                            (symbol, shares, risk['entry'], risk['stop_loss'], now, risk['estimated_value'])
+                        )
+                    st.success(f"Order BUY {symbol} berhasil dieksekusi secara simulasi dan masuk ke paper.db!")
+                except Exception as ex:
+                    st.error(f"Gagal mengeksekusi order: {ex}")
 
         else:
 
@@ -958,14 +989,24 @@ os.makedirs("data", exist_ok=True)
 
 try:
     with sqlite3.connect(db_path) as conn:
+        # Buat tabel jika belum ada (untuk mencegah error pada run pertama)
+        conn.execute('''CREATE TABLE IF NOT EXISTS orders(
+            id INTEGER PRIMARY KEY AUTOINCREMENT, signal_date TEXT, symbol TEXT,
+            side TEXT, lots INTEGER, ref_price REAL, limit_price REAL,
+            status TEXT DEFAULT 'PENDING', fill_price REAL, fill_date TEXT,
+            reason TEXT, pnl REAL)''')
+        conn.execute('''CREATE TABLE IF NOT EXISTS positions(
+            symbol TEXT PRIMARY KEY, shares INTEGER, entry REAL, stop REAL,
+            entry_date TEXT, last_checked TEXT, cost REAL)''')
+            
         portfolio = pd.read_sql("SELECT * FROM positions", conn)
-        trades = pd.read_sql("SELECT * FROM trades", conn)
+        trades = pd.read_sql("SELECT * FROM orders WHERE status='FILLED'", conn)
         
     if portfolio.empty and trades.empty:
-        st.info("Belum ada posisi paper trading. Jalankan perintah 'python main.py daily' di terminal untuk memulai.")
+        st.info("Belum ada posisi paper trading. Coba klik 'EXECUTE BUY' pada saham pilihan di atas.")
     else:
-        total_pnl = trades["pnl"].sum() if not trades.empty else 0
-        open_capital = portfolio["cost"].sum() if not portfolio.empty else 0
+        total_pnl = trades["pnl"].sum() if ('pnl' in trades.columns and not trades['pnl'].isna().all()) else 0
+        open_capital = portfolio["cost"].sum() if ('cost' in portfolio.columns and not portfolio.empty) else 0
         
         c1, c2, c3 = st.columns(3)
         c1.metric("Realized PnL (Closed Trades)", f"Rp {total_pnl:,.0f}")
@@ -975,11 +1016,11 @@ try:
         st.subheader("Aktif / Open Positions")
         st.dataframe(portfolio, use_container_width=True)
         
-        st.subheader("Trade History (Closed)")
-        st.dataframe(trades.sort_values("exit_date", ascending=False).head(20), use_container_width=True)
+        st.subheader("Trade History (Closed & Filled Orders)")
+        st.dataframe(trades.sort_values("id", ascending=False).head(20), use_container_width=True)
 
 except Exception as e:
-    st.info("Database paper.db belum terinisialisasi. Coba jalankan `python main.py daily` di terminal untuk mulai trading otomatis.")
+    st.info(f"Database error: {e}")
 
 
 # ============================================================
