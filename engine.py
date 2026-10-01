@@ -404,87 +404,241 @@ def calculate_range(df):
 
 
 
+
+def detect_support_resistance(df, lookback=40):
+    """Dynamic support/resistance from price distribution."""
+    recent = df.tail(lookback)
+    support    = float(recent['low'].quantile(0.15))
+    resistance = float(recent['high'].quantile(0.85))
+    return support, resistance
+
+
+def detect_anomaly(df):
+    """
+    Layer 1: Anomaly Detection.
+    Returns (is_anomaly: bool, reason: str).
+    Pause new entries when market behaves abnormally.
+    """
+    if len(df) < 5:
+        return False, ""
+    last = df.iloc[-1]
+    vol_ratio = float(last.get('volume_ratio', 1.0))
+    
+    if vol_ratio > 4.0:
+        return True, f"Volume spike {vol_ratio:.1f}x"
+    
+    hi = float(last['high']); lo = float(last['low']); cl = float(last['close'])
+    if cl > 0 and (hi - lo) / cl > 0.10:
+        return True, f"Price range spike {(hi-lo)/cl*100:.1f}%"
+    
+    if len(df) >= 20 and 'return' in df.columns:
+        ret_std = df['return'].tail(20).std()
+        last_ret = abs(float(df['return'].iloc[-1]))
+        if ret_std > 0 and last_ret / ret_std > 3.5:
+            return True, f"Return z-score {last_ret/ret_std:.1f}sigma"
+    
+    return False, ""
+
+
+def _score_rsi2(last, prev, regime):
+    """RSI-2 Connors Mean Reversion. Max 25."""
+    score = 0; reasons = []
+    rsi2  = float(last.get('rsi_2', 999))
+    close = float(last['close'])
+    ma200 = float(last.get('ma200', 0))
+    if pd.isna(rsi2) or rsi2 == 999:
+        return 0, []
+    if rsi2 < 5 and close > ma200 > 0:
+        score += 20; reasons.append(f"RSI(2)={rsi2:.1f} extreme oversold in uptrend")
+    elif rsi2 < 10 and close > ma200 > 0:
+        score += 12; reasons.append(f"RSI(2)={rsi2:.1f} oversold")
+    prev_rsi2 = float(prev.get('rsi_2', rsi2))
+    if score > 0 and rsi2 > prev_rsi2:
+        score += 5; reasons.append("RSI(2) recovering")
+    if regime == "BULL":
+        score = int(score * 1.2)
+    return min(score, 25), reasons
+
+
+def _score_trend(last, df):
+    """Trend Following: MA alignment. Max 20."""
+    score = 0; reasons = []
+    close = float(last['close'])
+    ma20  = float(last.get('ma20', 0))
+    ma50  = float(last.get('ma50', 0))
+    ma200 = float(last.get('ma200', 0))
+    if close > ma20 > ma50 > ma200 > 0:
+        score += 20; reasons.append("Full MA alignment (20>50>200)")
+    elif close > ma50 > ma200 > 0:
+        score += 12; reasons.append("Partial trend alignment")
+    elif close > ma200 > 0:
+        score += 6;  reasons.append("Price above MA200")
+    return min(score, 20), reasons
+
+
+def _score_breakout(last, prev, df):
+    """Breakout Momentum: New 20D high + volume. Max 20."""
+    score = 0; reasons = []
+    close    = float(last['close'])
+    high20   = float(last.get('high_20', float(last['high'])))
+    vol_ratio = float(last.get('volume_ratio', 1.0))
+    if close > high20:
+        score += 12; reasons.append(f"20D Breakout")
+        if vol_ratio > 1.5:
+            score += 8; reasons.append(f"Vol confirmed {vol_ratio:.1f}x")
+        elif vol_ratio > 1.2:
+            score += 4
+    return min(score, 20), reasons
+
+
+def _score_bollinger(last, regime):
+    """Bollinger Mean Reversion: Buy near lower band. Max 20."""
+    score = 0; reasons = []
+    close    = float(last['close'])
+    bb_lower = float(last.get('bb_lower', close))
+    bb_mid   = float(last.get('bb_middle', close))
+    rsi      = float(last.get('rsi', 50))
+    if regime == "SIDEWAYS":
+        if close <= bb_lower * 1.01 and rsi < 35:
+            score += 20; reasons.append(f"BB lower touch RSI={rsi:.0f}")
+        elif close <= bb_mid * 0.98 and rsi < 45:
+            score += 10; reasons.append("Below BB middle")
+    elif regime == "BULL" and close <= bb_lower * 1.02:
+        score += 10; reasons.append("BB lower dip-buy (bull)")
+    return min(score, 20), reasons
+
+
+def _score_volume(last, prev):
+    """Volume Intelligence: price-volume alignment. Max 15, can be negative."""
+    score = 0; reasons = []
+    vol_ratio  = float(last.get('volume_ratio', 1.0))
+    price_up   = float(last['close']) > float(prev['close'])
+    if price_up and vol_ratio > 1.5:
+        score += 15; reasons.append(f"Price up + Volume {vol_ratio:.1f}x")
+    elif price_up and vol_ratio > 1.2:
+        score += 8;  reasons.append(f"Volume {vol_ratio:.1f}x")
+    elif not price_up and vol_ratio > 2.0:
+        score -= 5;  reasons.append(f"WARNING: Price down + Volume {vol_ratio:.1f}x")
+    else:
+        score += 3
+    return score, reasons
+
+
 def signal_engine(df):
     """
-    IDXBot Multi-Strategy Scoring Engine
-    Menggabungkan 5 sub-strategi (RSI-2, Trend, Breakout, Mean Reversion, Volume).
+    IDXBot Multi-Layer Decision System v2
+    ======================================
+    Layer 1: Anomaly Detection
+    Layer 2: No-Trade Filters (liquidity, penny, volatility)
+    Layer 3: Market Regime (BULL/SIDEWAYS/BEAR)
+    Layer 4: Strategy Ensemble (5 strategies)
+    Layer 5: Score Aggregation + Signal Bucket
+
+    Score buckets:
+      0-49  → WAIT
+      50-64 → WATCH
+      65-79 → SETUP
+      80+   → ENTRY CANDIDATE
     """
-    if len(df) < 200:
-        return {"signal": "WAIT", "reason": "Data tidak cukup (butuh 200 baris)", "entry_score": 0, "support": 0, "resistance": 0}
+    _base = {
+        "signal": "WAIT", "reason": "Insufficient data",
+        "total_score": 0, "score_breakdown": {},
+        "regime": "UNKNOWN", "strategy": "—",
+        "entry_score": 0, "support": 0, "resistance": 0,
+    }
 
-    last = df.iloc[-1]
-    prev = df.iloc[-2]
-    
-    # 1. NO-TRADE ENGINE
-    if last['volume'] * last['close'] < MIN_AVG_VALUE:
-        return {"signal": "WAIT", "reason": "No-Trade: Low Liquidity", "entry_score": 0, "support": last['bb_lower'], "resistance": last['bb_upper']}
-    if last['close'] < 50:
-        return {"signal": "WAIT", "reason": "No-Trade: Penny Stock", "entry_score": 0, "support": last['bb_lower'], "resistance": last['bb_upper']}
-    if last['volatility'] > 1.0: # Volatilitas tahunan ekstrim (>100%)
-        return {"signal": "WAIT", "reason": "No-Trade: Extreme Volatility", "entry_score": 0, "support": last['bb_lower'], "resistance": last['bb_upper']}
+    if len(df) < 60:
+        return _base
 
-    # 2. MARKET REGIME ENGINE
+    last   = df.iloc[-1]
+    prev   = df.iloc[-2]
+    support, resistance = detect_support_resistance(df)
+
+    def _ret(signal, reason, score=0, regime="UNKNOWN", strategy="—", bd={}):
+        return {
+            "signal": signal, "reason": reason,
+            "total_score": score, "score_breakdown": bd,
+            "regime": regime, "strategy": strategy,
+            "entry_score": score, "support": support, "resistance": resistance,
+        }
+
+    # ── Layer 1: Anomaly ────────────────────────────────────
+    is_anomaly, anomaly_msg = detect_anomaly(df)
+    if is_anomaly:
+        return _ret("WAIT", f"ANOMALY DETECTED: {anomaly_msg}", regime="ANOMALY")
+
+    # ── Layer 2: No-Trade Filters ───────────────────────────
+    traded_val = float(last['close']) * float(last['volume'])
+    if traded_val < MIN_AVG_VALUE:
+        return _ret("WAIT", "Illiquid stock — skipped")
+    if float(last['close']) < 100:
+        return _ret("WAIT", "Penny stock (<Rp100)")
+    if 'volatility' in last.index and not pd.isna(last['volatility']) and float(last['volatility']) > 1.0:
+        return _ret("WAIT", "Extreme volatility >100% annual")
+
+    # ── Layer 3: Market Regime ──────────────────────────────
     regime = detect_regime(df)
     if regime == "BEAR":
-        # Di pasar turun, NO TRADE adalah keputusan terbaik
-        return {"signal": "WAIT", "reason": "No-Trade: Bear Market (Defensive/Cash)", "entry_score": 0, "support": last['bb_lower'], "resistance": last['bb_upper']}
+        return _ret("WAIT", "Bear market — defensive mode", regime=regime)
 
-    # 3. STRATEGY SCORING ENGINE
-    scores = {
-        "trend": 0,
-        "rsi_2": 0,
-        "volume": 0,
-        "breakout": 0,
-        "mean_reversion": 0,
-        "regime": 20 if regime == "BULL" else 10 if regime == "SIDEWAYS" else 0,
-        "liquidity": 10 if last['volume'] * last['close'] > MIN_AVG_VALUE * 2 else 5
+    # ── Layer 4: Strategy Ensemble ──────────────────────────
+    bd = {}
+    all_reasons = [f"Regime: {regime}"]
+
+    bd["regime"]    = 15 if regime == "BULL" else 8
+    bd["liquidity"] = 8 if traded_val > MIN_AVG_VALUE * 3 else 5
+
+    s1, r1 = _score_rsi2(last, prev, regime)
+    s2, r2 = _score_trend(last, df)
+    s3, r3 = _score_breakout(last, prev, df)
+    s4, r4 = _score_bollinger(last, regime)
+    s5, r5 = _score_volume(last, prev)
+
+    bd["rsi_2"]          = s1
+    bd["trend"]          = s2
+    bd["breakout"]       = s3
+    bd["mean_reversion"] = s4
+    bd["volume"]         = s5
+
+    # Support proximity bonus
+    close_px = float(last['close'])
+    bd["support_proximity"] = 7 if support > 0 and abs(close_px - support) / close_px < 0.03 else 0
+
+    all_reasons.extend([r for rs in [r1,r2,r3,r4,r5] for r in rs])
+
+    total_score = max(0, min(100, sum(bd.values())))
+
+    strat_scores = {
+        "RSI-2 Mean Reversion":  s1,
+        "Trend Following":       s2,
+        "Breakout Momentum":     s3,
+        "Bollinger Reversion":   s4,
+        "Volume/Price Momentum": s5,
     }
-    
-    reasons = [f"Regime: {regime}"]
+    dominant = max(strat_scores, key=strat_scores.get)
 
-    # Strat 1: Connors RSI-2 (Buy oversold pullback in uptrend)
-    if last['close'] > last['ma200'] and last['rsi_2'] < 10:
-        scores["rsi_2"] += 25
-        reasons.append("RSI-2 Pullback")
-        
-    # Strat 2: Trend Following (Strong momentum)
-    if last['ma20'] > last['ma50'] > last['ma200'] and last['close'] > last['ma20']:
-        scores["trend"] += 20
-        reasons.append("Strong Trend")
-        
-    # Strat 3: Breakout Momentum (New Highs)
-    if last['close'] > prev['high_20']:
-        scores["breakout"] += 15
-        reasons.append("20D Breakout")
-        
-    # Strat 4: Bollinger Mean Reversion (Buy at Support)
-    if regime == "SIDEWAYS" and last['close'] < last['bb_lower'] and last['rsi'] < 35:
-        scores["mean_reversion"] += 25
-        reasons.append("BB Mean Reversion")
-        
-    # Strat 5: Volume Confirmation (Smart money)
-    if last['volume'] > last['volume_ma20'] * 1.5:
-        scores["volume"] += 15
-        reasons.append("High Volume")
-
-    total_score = sum(scores.values())
-    
+    # ── Layer 5: Signal Bucket ──────────────────────────────
     if total_score >= 80:
-        return {
-            "signal": "ENTRY CANDIDATE", 
-            "reason": " + ".join(reasons), 
-            "entry_score": total_score, 
-            "support": last["bb_lower"], 
-            "resistance": last["bb_upper"]
-        }
+        bucket = "ENTRY CANDIDATE"
+    elif total_score >= 65:
+        bucket = "SETUP"
+    elif total_score >= 50:
+        bucket = "WATCH"
     else:
-        return {
-            "signal": "WAIT", 
-            "reason": f"Score {total_score}/100. Need >= 80", 
-            "entry_score": total_score, 
-            "support": last["bb_lower"], 
-            "resistance": last["bb_upper"]
-        }
+        bucket = "WAIT"
+
+    return {
+        "signal":          bucket,
+        "reason":          " | ".join(all_reasons[:5]),
+        "total_score":     total_score,
+        "score_breakdown": bd,
+        "regime":          regime,
+        "strategy":        dominant,
+        "entry_score":     total_score,
+        "support":         support,
+        "resistance":      resistance,
+    }
+
 
 
 def penetration_engine(df):

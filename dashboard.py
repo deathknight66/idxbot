@@ -529,40 +529,71 @@ with right:
     if data_ok:
         try:
             sig      = signal_engine(df)
-            score    = sig.get('total_score', sig.get('entry_score', 0))
+            score    = sig.get('total_score', 0)
             regime   = sig.get('regime', 'UNKNOWN')
             strategy = sig.get('strategy', 'Multi-Strategy')
+            breakdown = sig.get('score_breakdown', {})
             approved = risk.get('approved', False)
-        except:
-            score = 0; regime = "UNKNOWN"; strategy = "N/A"; approved = False
+        except Exception as e:
+            score = 0; regime = "UNKNOWN"; strategy = "N/A"
+            breakdown = {}; approved = False
         
         sig_color = "#26a69a" if approved else "#ef5350"
         sig_label = "🟢 BUY" if approved else "🔴 WAIT"
-        rsi2_show = rsi2_val if data_ok else 0
-        above_200 = "✅" if last_price > ma200_val and ma200_val > 0 else "❌"
-        vol_icon  = "✅" if vol_ratio > 1.2 else "⚠️"
+        
+        # Score bar
+        bar_w  = max(0, min(100, score))
+        bar_c  = "#26a69a" if score >= 65 else "#FF6D00" if score >= 50 else "#ef5350"
+        
+        # Build breakdown rows
+        bd_labels = {
+            "regime": "Market Regime", "liquidity": "Liquidity",
+            "rsi_2": "RSI-2 Connors", "trend": "Trend Following",
+            "breakout": "Breakout", "mean_reversion": "Bollinger Rev.",
+            "volume": "Volume Intel", "support_proximity": "Near Support",
+        }
+        bd_html = ""
+        for k, label in bd_labels.items():
+            v = breakdown.get(k, 0)
+            if v == 0:
+                continue
+            max_v = {"regime":15,"liquidity":8,"rsi_2":25,"trend":20,
+                     "breakout":20,"mean_reversion":20,"volume":15,"support_proximity":7}.get(k,10)
+            pct = max(0, min(100, int(v / max_v * 100)))
+            color = "#26a69a" if v > 0 else "#ef5350"
+            bd_html += f"""
+<div style="display:flex;align-items:center;gap:6px;padding:2px 0;">
+  <span style="width:90px;font-size:10px;color:#787b86">{label}</span>
+  <div style="flex:1;background:#2A2E39;border-radius:2px;height:6px">
+    <div style="width:{pct}%;background:{color};height:6px;border-radius:2px"></div>
+  </div>
+  <span style="width:24px;font-size:10px;color:{color};font-weight:700">{v:+.0f}</span>
+</div>"""
         
         st.markdown(f"""
 <div class="sig-card">
-  <div style="font-size:13px;font-weight:700;margin-bottom:6px">
-    🤖 BOT ANALYSIS
+  <div style="font-size:12px;font-weight:700;color:#787b86;margin-bottom:4px">🤖 BOT ANALYSIS</div>
+  <div style="font-size:18px;font-weight:700;color:{sig_color}">{sig_label}</div>
+  <div style="font-size:11px;color:#787b86;margin-bottom:6px">{strategy}</div>
+  
+  <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+    <span style="font-size:11px;color:#787b86">Score</span>
+    <span style="font-size:14px;font-weight:700;color:{bar_c}">{score}/100</span>
   </div>
-  <div style="font-size:20px;font-weight:700;color:{sig_color};margin-bottom:8px">
-    {sig_label}
+  <div style="background:#2A2E39;border-radius:4px;height:8px;margin-bottom:8px">
+    <div style="width:{bar_w}%;background:{bar_c};height:8px;border-radius:4px"></div>
   </div>
-  <div class="sig-row"><span>Score</span><b>{score}/100</b></div>
-  <div class="sig-row"><span>Strategy</span><b style="font-size:11px">{strategy}</b></div>
+  
+  <div style="font-size:10px;color:#787b86;font-weight:700;margin-bottom:4px">SCORE BREAKDOWN</div>
+  {bd_html}
+  
+  <div style="font-size:10px;color:#787b86;font-weight:700;margin-top:8px;margin-bottom:4px">TRADE PLAN</div>
   <div class="sig-row"><span>Regime</span><b>{regime}</b></div>
-  <div style="margin-top:6px;font-size:11px;color:#787b86;font-weight:700">CONDITIONS</div>
-  <div class="sig-row"><span>RSI(2)</span><b>{rsi2_show:.1f} {"✅" if rsi2_show < 5 else "⚠️" if rsi2_show < 20 else "❌"}</b></div>
-  <div class="sig-row"><span>Price > MA200</span><b>{above_200}</b></div>
-  <div class="sig-row"><span>Volume</span><b>{vol_ratio:.1f}x {vol_icon}</b></div>
-  <div style="margin-top:6px;font-size:11px;color:#787b86;font-weight:700">TRADE PLAN</div>
   <div class="sig-row"><span>Entry</span><b>Rp{last_price:,.0f}</b></div>
   <div class="sig-row"><span>Stop Loss</span><b style="color:#ef5350">Rp{sl_px:,.0f}</b></div>
   <div class="sig-row"><span>Take Profit</span><b style="color:#26a69a">Rp{tp_px:,.0f}</b></div>
-  <div class="sig-row"><span>Lot</span><b>{lots_rc} lot</b></div>
-  <div class="sig-row"><span>Reason</span><b style="font-size:10px">{risk.get("reason","")}</b></div>
+  <div class="sig-row"><span>Lots</span><b>{lots_rc} lot</b></div>
+  <div style="font-size:10px;color:#787b86;margin-top:4px">{risk.get("reason","")}</div>
 </div>""", unsafe_allow_html=True)
     
     st.markdown("<hr style='border-color:#2A2E39;margin:8px 0'>", unsafe_allow_html=True)
