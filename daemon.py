@@ -50,6 +50,12 @@ def init_db():
         conn.execute('''CREATE TABLE IF NOT EXISTS positions(
             symbol TEXT PRIMARY KEY, shares INTEGER, entry REAL, stop REAL,
             entry_date TEXT, last_checked TEXT, cost REAL)''')
+        conn.execute('''CREATE TABLE IF NOT EXISTS kv(k TEXT PRIMARY KEY, v REAL)''')
+        
+        # Inisialisasi modal awal jika kosong
+        if conn.execute("SELECT 1 FROM kv WHERE k='cash'").fetchone() is None:
+            conn.execute("INSERT INTO kv VALUES('cash', ?)", (INITIAL_CAPITAL,))
+            conn.commit()
 
 def run_cycle():
     logger.info("Memulai siklus scanning market...")

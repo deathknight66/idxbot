@@ -936,8 +936,12 @@ if not scan_df.empty:
                         else:
                             # Cek sisa saldo tunai (Cash Management)
                             conn.execute('''CREATE TABLE IF NOT EXISTS kv(k TEXT PRIMARY KEY, v REAL)''')
+                            
+                            if conn.execute("SELECT 1 FROM kv WHERE k='cash'").fetchone() is None:
+                                conn.execute("INSERT INTO kv VALUES('cash', ?)", (INITIAL_CAPITAL,))
+                                
                             cash_row = conn.execute("SELECT v FROM kv WHERE k='cash'").fetchone()
-                            available_cash = float(cash_row[0]) if cash_row else INITIAL_CAPITAL
+                            available_cash = float(cash_row[0])
                             
                             shares = int(risk['lots'] * 100)
                             entry_price = float(risk['entry'])
