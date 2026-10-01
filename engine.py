@@ -621,6 +621,25 @@ def risk_check(
     price = latest["close"]
     atr = latest["atr"]
 
+    import sqlite3
+    import os
+    open_positions = 0
+    invested_capital = 0
+    try:
+        if os.path.exists('data/paper.db'):
+            with sqlite3.connect('data/paper.db') as conn:
+                positions = conn.execute("SELECT cost FROM positions").fetchall()
+                open_positions = len(positions)
+                invested_capital = sum([p[0] for p in positions])
+    except:
+        pass
+
+    if open_positions >= 5:
+        return {"approved": False, "reason": "MAX POSITIONS (5) HIT"}
+        
+    if invested_capital >= (capital * 0.6):
+        return {"approved": False, "reason": "MAX EXPOSURE (60%) HIT"}
+
     if pd.isna(atr) or price <= 0:
 
         return {
