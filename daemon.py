@@ -27,6 +27,9 @@ from dashboard import (
     penetration_engine, risk_check, INITIAL_CAPITAL
 )
 
+# Suppress Streamlit thread context warnings when running in background daemon
+logging.getLogger("streamlit.runtime.scriptrunner_utils.script_run_context").setLevel(logging.ERROR)
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | DAEMON | %(levelname)s | %(message)s"

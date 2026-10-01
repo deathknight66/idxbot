@@ -473,6 +473,13 @@ def risk_check(
     # Stop loss berbasis ATR
     stop_distance = atr * 1.5
 
+    if stop_distance <= 0:
+        return {
+            "approved": False,
+            "reason": "Stop distance is zero (No volatility)",
+            "quantity": 0,
+        }
+
     risk_amount = (
         capital * risk_per_trade
     )
@@ -922,19 +929,22 @@ if not scan_df.empty:
                             symbol TEXT PRIMARY KEY, shares INTEGER, entry REAL, stop REAL,
                             entry_date TEXT, last_checked TEXT, cost REAL)''')
                         
-                        # Masukkan ke tabel orders
-                        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        conn.execute(
-                            "INSERT INTO orders (signal_date, symbol, side, lots, ref_price, status) VALUES (?, ?, ?, ?, ?, ?)",
-                            (now, symbol, "BUY", risk['lots'], risk['entry'], "FILLED")
-                        )
-                        # Masukkan ke posisi
-                        shares = risk['lots'] * 100
-                        conn.execute(
-                            "INSERT OR REPLACE INTO positions (symbol, shares, entry, stop, entry_date, cost) VALUES (?, ?, ?, ?, ?, ?)",
-                            (symbol, shares, risk['entry'], risk['stop_loss'], now, risk['estimated_value'])
-                        )
-                    st.success(f"Order BUY {symbol} berhasil dieksekusi secara simulasi dan masuk ke paper.db!")
+                        # Cek jangan sampai double buy / overwrite
+                        pos_exists = conn.execute("SELECT symbol FROM positions WHERE symbol=?", (symbol,)).fetchone()
+                        if pos_exists:
+                            st.error(f"Saham {symbol} sudah ada di portofolio. Jual (Close Position) terlebih dahulu sebelum membeli lagi!")
+                        else:
+                            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            conn.execute(
+                                "INSERT INTO orders (signal_date, symbol, side, lots, ref_price, status, reason) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                                (now, symbol, "BUY", int(risk['lots']), float(risk['entry']), "FILLED", "MANUAL DASHBOARD BUY")
+                            )
+                            shares = int(risk['lots'] * 100)
+                            conn.execute(
+                                "INSERT INTO positions (symbol, shares, entry, stop, entry_date, cost) VALUES (?, ?, ?, ?, ?, ?)",
+                                (symbol, shares, float(risk['entry']), float(risk['stop_loss']), now, float(risk['estimated_value']))
+                            )
+                            st.success(f"Order BUY {symbol} berhasil dieksekusi secara simulasi dan masuk ke paper.db!")
                 except Exception as ex:
                     st.error(f"Gagal mengeksekusi order: {ex}")
 
