@@ -7,6 +7,65 @@ import pandas as pd
 import yfinance as yf
 import streamlit as st
 import plotly.graph_objects as go
+import hashlib
+import os
+import sqlite3
+from datetime import datetime
+
+# ============================================================
+# AUTHENTICATION SYSTEM
+# ============================================================
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def show_login_page():
+    st.title("🛡️ IDXBot Command Center")
+    st.markdown("Silakan masuk ke akunmu untuk mengakses mesin trading.")
+    
+    os.makedirs("data", exist_ok=True)
+    with sqlite3.connect("data/paper.db") as conn:
+        conn.execute('''CREATE TABLE IF NOT EXISTS users (
+            username TEXT PRIMARY KEY,
+            password_hash TEXT,
+            created_at TEXT
+        )''')
+        
+    tab1, tab2 = st.tabs(["🔑 Login", "📝 Register (Akun Baru)"])
+    
+    with tab1:
+        log_user = st.text_input("Username", key="log_user")
+        log_pass = st.text_input("Password", type="password", key="log_pass")
+        if st.button("Masuk", use_container_width=True):
+            with sqlite3.connect("data/paper.db") as conn:
+                user = conn.execute("SELECT password_hash FROM users WHERE username=?", (log_user,)).fetchone()
+                if user and user[0] == hash_password(log_pass):
+                    st.session_state["logged_in"] = True
+                    st.session_state["username"] = log_user
+                    st.rerun()
+                else:
+                    st.error("Username atau password salah!")
+                    
+    with tab2:
+        reg_user = st.text_input("Username Baru", key="reg_user")
+        reg_pass = st.text_input("Password", type="password", key="reg_pass")
+        reg_pass2 = st.text_input("Konfirmasi Password", type="password", key="reg_pass2")
+        if st.button("Buat Akun", use_container_width=True):
+            if reg_pass != reg_pass2:
+                st.error("Password tidak cocok!")
+            elif len(reg_user) < 3 or len(reg_pass) < 3:
+                st.error("Username dan Password minimal 3 karakter.")
+            else:
+                with sqlite3.connect("data/paper.db") as conn:
+                    try:
+                        conn.execute("INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)",
+                                     (reg_user, hash_password(reg_pass), datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+                        st.success("Berhasil didaftarkan! Silakan buka tab Login.")
+                    except sqlite3.IntegrityError:
+                        st.error("Username sudah terpakai!")
+
+if not st.session_state.get("logged_in", False):
+    show_login_page()
+    st.stop()
 
 
 # ============================================================
@@ -658,9 +717,17 @@ st.caption(
 
 
 # ============================================================
+# ============================================================
 # SIDEBAR
 # ============================================================
 
+st.sidebar.markdown(f"👤 **Halo, {st.session_state['username']}!**")
+if st.sidebar.button("Logout"):
+    st.session_state["logged_in"] = False
+    st.session_state["username"] = ""
+    st.rerun()
+
+st.sidebar.write("---")
 st.sidebar.header("Bot Control")
 
 capital = st.sidebar.number_input(
