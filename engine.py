@@ -149,6 +149,7 @@ def calculate_indicators(df):
     df = df.copy()
 
     # Moving averages
+    df["ma5"] = df["close"].rolling(5).mean()
     df["ma20"] = df["close"].rolling(20).mean()
     df["ma50"] = df["close"].rolling(50).mean()
     df["ma200"] = df["close"].rolling(200).mean()
@@ -390,10 +391,11 @@ def calculate_range(df):
 
 
 
+
 def signal_engine(df):
     """
-    Signal Engine yang beradaptasi dengan Market Regime.
-    Menggantikan Penetration Engine yang lama.
+    Signal Engine (High-Probability Algorithmic Trading)
+    Mengkombinasikan Mark Minervini Trend Template & Larry Connors RSI 2 Mean Reversion.
     """
     if len(df) < 200:
         return {"signal": "WAIT", "reason": "Data tidak cukup (butuh 200 baris)"}
@@ -402,55 +404,51 @@ def signal_engine(df):
     last = df.iloc[-1]
     prev = df.iloc[-2]
     
+    # 1. Liquidity & Volatility Check (Wajib untuk semua)
+    if last['volume'] * last['close'] < MIN_AVG_VALUE:
+        return {"signal": "WAIT", "reason": "Likuiditas Terlalu Rendah"}
+    if last['close'] < 50:
+        return {"signal": "WAIT", "reason": "Saham Gocap / Penny Stock"}
+        
     score = 0
     reason = []
     
     if regime == "BULL":
-        # Strategy A: Trend Following / Breakout / Momentum
-        if last['close'] > last['ma20']:
-            score += 30
-            reason.append("Harga di atas MA20 (Trend Kuat)")
+        # STRATEGI 1: Connors RSI 2 Pullback (Win Rate Tinggi)
+        # Beli saat tren jangka panjang naik, tapi terjadi panic selling jangka pendek ekstrem
+        if last['rsi_2'] < 10:
+            score += 60
+            reason.append("Connors RSI-2 Extreme Pullback (<10)")
             
-        if last['close'] > prev['bb_upper'] and last['volume'] > last['volume_ma20'] * 1.5:
-            score += 40
-            reason.append("Breakout BB Upper dengan Volume Tinggi")
-            
-        if last['rsi'] > 50 and last['rsi'] < 75:
-            score += 30
-            reason.append("RSI Momentum Bullish")
-            
-    elif regime == "SIDEWAYS":
-        # Strategy B: Mean Reversion / Range Trading
         if last['close'] < last['bb_lower']:
-            score += 40
-            reason.append("Oversold di BB Lower (Mean Reversion)")
-            
-        if last['rsi'] < 35:
             score += 30
-            reason.append("RSI Oversold")
+            reason.append("Harga menembus Bollinger Bawah (Oversold)")
             
-        if last['close'] > last['bb_lower'] and prev['close'] <= prev['bb_lower']:
-            score += 30
-            reason.append("Rebound dari BB Lower")
+        # STRATEGI 2: Minervini Volatility Contraction / Breakout
+        if last['close'] > prev['bb_upper'] and last['volume'] > last['volume_ma20'] * 2:
+            score += 90
+            reason.append("Minervini Breakout dengan Volume Tinggi")
+
+    elif regime == "SIDEWAYS":
+        # STRATEGI 3: Standard Mean Reversion Range Trading
+        if last['rsi'] < 30 and last['close'] < last['bb_lower']:
+            score += 85
+            reason.append("Oversold di Support Sideways (Mean Reversion)")
             
     elif regime == "BEAR":
-        # Strategy C: Defensive / Cash
-        # Terlalu berbahaya untuk long, butuh konfirmasi super kuat (Bottom Fishing ekstrem)
-        if last['rsi'] < 20 and last['close'] < last['bb_lower'] * 0.95:
-            score += 50
-            reason.append("Extreme Oversold di Bear Market (High Risk)")
+        # STRATEGI 4: Defensive Cash
+        # Di pasar beruang, probabilitas saham naik sangat kecil.
+        # Kita hanya beli jika terjadi anomali 'Flash Crash' yang sangat ekstrem.
+        if last['rsi_2'] < 2 and last['close'] < last['bb_lower'] * 0.90:
+            score += 85
+            reason.append("Flash Crash Reversal (Deep Discount)")
         else:
-            return {"signal": "WAIT", "reason": f"Regime BEAR: Defensive (Cash is King)"}
-
-    # Liquidity Check (berlaku untuk semua regime)
-    if last['volume'] * last['close'] < MIN_AVG_VALUE:
-        score -= 50
-        reason.append("Likuiditas Terlalu Rendah")
+            return {"signal": "WAIT", "reason": "Regime BEAR: Cash is King (Tidak Trading)"}
 
     if score >= 80:
         return {"signal": "ENTRY CANDIDATE", "reason": f"Regime {regime} | " + " + ".join(reason)}
     else:
-        return {"signal": "WAIT", "reason": f"Regime {regime} | Score {score}/80"}
+        return {"signal": "WAIT", "reason": f"Regime {regime} | Mencari Setup Probabilitas Tinggi..."}
 
 
 def penetration_engine(df):
