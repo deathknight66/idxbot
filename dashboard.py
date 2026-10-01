@@ -100,6 +100,56 @@ def load_portfolio_local():
         cash = float(cash_row[0]) if cash_row else INITIAL_CAPITAL
     return portfolio, cash
 
+def execute_order(symbol, side, lots, price, reason):
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with sqlite3.connect("data/paper.db") as conn:
+        cash_row = conn.execute("SELECT v FROM kv WHERE k='cash'").fetchone()
+        cash = float(cash_row[0]) if cash_row else INITIAL_CAPITAL
+        shares = int(lots * 100)
+        gross = shares * price
+        
+        if side == "BUY":
+            cost = gross * 1.0015
+            if cash < cost:
+                raise ValueError("Insufficient cash")
+                
+            conn.execute("UPDATE kv SET v = v - ? WHERE k='cash'", (cost,))
+            
+            existing = conn.execute("SELECT shares, cost FROM positions WHERE symbol=?", (symbol,)).fetchone()
+            if existing:
+                new_shares = existing[0] + shares
+                new_cost = existing[1] + cost
+                new_entry = new_cost / (new_shares * 1.0015)
+                conn.execute("UPDATE positions SET shares=?, cost=?, entry=? WHERE symbol=?", (new_shares, new_cost, new_entry, symbol))
+            else:
+                conn.execute("INSERT INTO positions (symbol, shares, entry, stop, entry_date, last_checked, cost) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                             (symbol, shares, price, price * 0.9, now, now, cost))
+                             
+            conn.execute("INSERT INTO orders (signal_date, symbol, side, lots, ref_price, status, fill_price, fill_date, reason, pnl) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                         (now, symbol, "BUY", lots, price, "FILLED", price, now, reason, 0))
+                         
+        elif side == "SELL":
+            existing = conn.execute("SELECT shares, cost, entry FROM positions WHERE symbol=?", (symbol,)).fetchone()
+            if not existing or existing[0] < shares:
+                raise ValueError("Not enough shares to sell")
+                
+            net = gross * 0.9975
+            conn.execute("UPDATE kv SET v = v + ? WHERE k='cash'", (net,))
+            
+            avg_cost = (existing[1] / existing[0]) * shares
+            pnl = net - avg_cost
+            
+            if existing[0] == shares:
+                conn.execute("DELETE FROM positions WHERE symbol=?", (symbol,))
+            else:
+                rem_shares = existing[0] - shares
+                rem_cost = existing[1] - avg_cost
+                conn.execute("UPDATE positions SET shares=?, cost=? WHERE symbol=?", (rem_shares, rem_cost, symbol))
+                
+            conn.execute("INSERT INTO orders (signal_date, symbol, side, lots, ref_price, status, fill_price, fill_date, reason, pnl) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                         (now, symbol, "SELL", lots, price, "FILLED", price, now, reason, pnl))
+        conn.commit()
+
 def load_trade_history_local():
     os.makedirs("data", exist_ok=True)
     with sqlite3.connect("data/paper.db") as conn:
@@ -147,7 +197,7 @@ if view_mode == "🏠 Trading Terminal":
     st.write("")
 
     # 2. SCANNER & PORTFOLIO IN ONE ROW
-    col_left, col_right = st.columns([1.2, 1])
+    col_left, col_right = st.columns([2.5, 1])
     
     with col_left:
         st.subheader("📡 Live Signals (Scanner)")
