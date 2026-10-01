@@ -274,17 +274,34 @@ except Exception as e:
     df, last_price, chg_pct, chg_color, chg_sign = None, 0, 0, "#787b86", "─"
     data_ok = False
 
-t1,t2,t3,t4,t5,t6,t7,t8 = st.columns([1.2,1.5,0.8,0.8,0.8,0.8,0.8,0.8])
-t1.markdown(f"<b style='font-size:16px'>📈 IDXBot</b> &nbsp;"
-            f"<span style='color:#26a69a;font-size:11px'>● PAPER</span>",
-            unsafe_allow_html=True)
-t2.markdown(f"<span style='font-size:20px;font-weight:700'>{selected} &nbsp;"
-            f"<span style='color:{chg_color}'>{last_price:,.0f} {chg_sign}{abs(chg_pct):.2f}%</span></span>",
-            unsafe_allow_html=True)
-t3.metric("Equity",    f"Rp{equity/1e6:.1f}M")
-t4.metric("Cash",      f"Rp{cash/1e6:.1f}M")
-t5.metric("Invested",  f"Rp{invested/1e6:.1f}M")
-t6.metric("Positions", f"{len(positions)}/5")
+t1,t2,t3,t4,t5,t6,t7,t8 = st.columns([1.5, 2, 1, 1, 1, 0.8, 0.8, 0.6])
+t1.markdown(
+    f"<div style='padding-top:6px'><b style='font-size:15px'>📈 IDXBot</b> "
+    f"<span style='color:#26a69a;font-size:11px'>● PAPER</span></div>",
+    unsafe_allow_html=True
+)
+t2.markdown(
+    f"<div style='padding-top:4px;font-size:18px;font-weight:700'>"
+    f"{selected}&nbsp;"
+    f"<span style='color:{chg_color}'>{last_price:,.0f} {chg_sign}{abs(chg_pct):.2f}%</span>"
+    f"</div>",
+    unsafe_allow_html=True
+)
+
+def _metric(col, label, value):
+    col.markdown(
+        f"<div style='background:#1E222D;border:1px solid #2A2E39;border-radius:4px;"
+        f"padding:4px 8px;text-align:center'>"
+        f"<div style='font-size:10px;color:#787b86'>{label}</div>"
+        f"<div style='font-size:14px;font-weight:700;color:#D1D4DC'>{value}</div>"
+        f"</div>",
+        unsafe_allow_html=True
+    )
+
+_metric(t3, "Equity",    f"Rp{equity/1e6:.1f}M")
+_metric(t4, "Cash",      f"Rp{cash/1e6:.1f}M")
+_metric(t5, "Invested",  f"Rp{invested/1e6:.1f}M")
+_metric(t6, "Pos",       f"{len(positions)}/5")
 
 period_opts = {"1m":"1mo","3m":"3mo","6m":"6mo","1y":"1y","3y":"3y"}
 chosen = t7.selectbox("", list(period_opts.keys()), index=3, label_visibility="collapsed")
@@ -292,7 +309,7 @@ if period_opts[chosen] != st.session_state["period"]:
     st.session_state["period"] = period_opts[chosen]
     st.rerun()
 
-if t8.button("🚪 Logout"):
+if t8.button("Exit"):
     st.session_state["logged_in"] = False
     st.rerun()
 
@@ -716,20 +733,10 @@ with tab_ord:
     if orders.empty:
         st.info("Belum ada order.")
     else:
-        def style_side(val):
-            return "color:#26a69a;font-weight:700" if val == "BUY" else "color:#ef5350;font-weight:700"
-        def style_pnl(val):
-            try:
-                return "color:#26a69a" if float(val) >= 0 else "color:#ef5350"
-            except:
-                return ""
-        st.dataframe(
-            orders[['ts','symbol','side','lots','price','status','reason','pnl']].style
-                .applymap(style_side, subset=['side'])
-                .applymap(style_pnl,  subset=['pnl'])
-                .format({'price':'{:,.0f}', 'pnl':'{:,.0f}'}),
-            use_container_width=True, height=200
-        )
+        disp = orders[['ts','symbol','side','lots','price','status','reason','pnl']].copy()
+        disp['price'] = disp['price'].apply(lambda x: f"Rp{x:,.0f}")
+        disp['pnl']   = disp['pnl'].apply(lambda x: f"+Rp{x:,.0f}" if x >= 0 else f"-Rp{abs(x):,.0f}")
+        st.dataframe(disp, use_container_width=True, height=200)
 
 with tab_sig:
     st.markdown("**🤖 Bot Scan Results** (Top 15 universe)")
