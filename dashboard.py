@@ -105,13 +105,51 @@ st.set_page_config(
 
 st.title("📈 Trading Bot Command Center")
 
-st.caption(
-    "Prototype — Universe Selection → "
-    "Penetration → Risk → Monitoring"
-)
+# ------------------------------------------------------------
+# GLOBAL PORTFOLIO SUMMARY (Ditaruh di Paling Atas!)
+# ------------------------------------------------------------
+import sqlite3
+from pathlib import Path
 
+db_path = "data/paper.db"
+os.makedirs("data", exist_ok=True)
 
-# ============================================================
+try:
+    with sqlite3.connect(db_path) as conn:
+        conn.execute('''CREATE TABLE IF NOT EXISTS orders(
+            id INTEGER PRIMARY KEY AUTOINCREMENT, signal_date TEXT, symbol TEXT,
+            side TEXT, lots INTEGER, ref_price REAL, limit_price REAL,
+            status TEXT DEFAULT 'PENDING', fill_price REAL, fill_date TEXT,
+            reason TEXT, pnl REAL)''')
+        conn.execute('''CREATE TABLE IF NOT EXISTS positions(
+            symbol TEXT PRIMARY KEY, shares INTEGER, entry REAL, stop REAL,
+            entry_date TEXT, last_checked TEXT, cost REAL)''')
+        conn.execute('''CREATE TABLE IF NOT EXISTS kv(k TEXT PRIMARY KEY, v REAL)''')
+        
+        # Inisialisasi modal awal jika kosong
+        if conn.execute("SELECT 1 FROM kv WHERE k='cash'").fetchone() is None:
+            from engine import INITIAL_CAPITAL
+            conn.execute("INSERT INTO kv VALUES('cash', ?)", (INITIAL_CAPITAL,))
+            conn.commit()
+            
+        portfolio = pd.read_sql("SELECT * FROM positions", conn)
+        trades = pd.read_sql("SELECT * FROM orders WHERE status='FILLED'", conn)
+        cash_row = conn.execute("SELECT v FROM kv WHERE k='cash'").fetchone()
+        available_cash = float(cash_row[0]) if cash_row else 0
+
+    total_pnl = pd.to_numeric(trades["pnl"], errors='coerce').sum() if ('pnl' in trades.columns) else 0
+    open_capital = pd.to_numeric(portfolio["cost"], errors='coerce').sum() if ('cost' in portfolio.columns and not portfolio.empty) else 0
+    
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Available Cash 💵", f"Rp {available_cash:,.0f}")
+    m2.metric("Total Open Capital 📊", f"Rp {open_capital:,.0f}")
+    m3.metric("Net Realized PnL 📉", f"Rp {total_pnl:,.0f}")
+    m4.metric("Executed Trades ⚡", len(trades))
+    
+    st.write("---")
+except Exception as e:
+    st.error(f"Gagal memuat Global Summary: {e}")
+
 # ============================================================
 # SIDEBAR
 # ============================================================
@@ -449,46 +487,9 @@ if not scan_df.empty:
 
 st.header("3. PnL Monitoring")
 
-import sqlite3
-from pathlib import Path
-import os
-
-db_path = "data/paper.db"
-os.makedirs("data", exist_ok=True)
-
 try:
-    with sqlite3.connect(db_path) as conn:
-        conn.execute('''CREATE TABLE IF NOT EXISTS orders(
-            id INTEGER PRIMARY KEY AUTOINCREMENT, signal_date TEXT, symbol TEXT,
-            side TEXT, lots INTEGER, ref_price REAL, limit_price REAL,
-            status TEXT DEFAULT 'PENDING', fill_price REAL, fill_date TEXT,
-            reason TEXT, pnl REAL)''')
-        conn.execute('''CREATE TABLE IF NOT EXISTS positions(
-            symbol TEXT PRIMARY KEY, shares INTEGER, entry REAL, stop REAL,
-            entry_date TEXT, last_checked TEXT, cost REAL)''')
-        conn.execute('''CREATE TABLE IF NOT EXISTS kv(k TEXT PRIMARY KEY, v REAL)''')
-        
-        # Inisialisasi modal awal jika kosong
-        if conn.execute("SELECT 1 FROM kv WHERE k='cash'").fetchone() is None:
-            conn.execute("INSERT INTO kv VALUES('cash', ?)", (INITIAL_CAPITAL,))
-            conn.commit()
-            
-        portfolio = pd.read_sql("SELECT * FROM positions", conn)
-        trades = pd.read_sql("SELECT * FROM orders WHERE status='FILLED'", conn)
-        cash_row = conn.execute("SELECT v FROM kv WHERE k='cash'").fetchone()
-        available_cash = float(cash_row[0]) if cash_row else 0
-        
     if portfolio.empty and trades.empty:
         st.info("Belum ada posisi paper trading. Coba klik 'EXECUTE BUY' pada saham pilihan di atas.")
-    
-    total_pnl = pd.to_numeric(trades["pnl"], errors='coerce').sum() if ('pnl' in trades.columns) else 0
-    open_capital = pd.to_numeric(portfolio["cost"], errors='coerce').sum() if ('cost' in portfolio.columns and not portfolio.empty) else 0
-    
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Available Cash", f"Rp {available_cash:,.0f}")
-    c2.metric("Total Open Capital", f"Rp {open_capital:,.0f}")
-    c3.metric("Net Realized PnL (After Fee)", f"Rp {total_pnl:,.0f}")
-    c4.metric("Executed Trades", len(trades))
     
     st.subheader("Aktif / Open Positions")
     st.dataframe(portfolio, use_container_width=True)
