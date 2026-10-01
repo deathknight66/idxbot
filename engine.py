@@ -408,7 +408,7 @@ def signal_engine(df):
     Mengkombinasikan Mark Minervini Trend Template & Larry Connors RSI 2 Mean Reversion.
     """
     if len(df) < 200:
-        return {"signal": "WAIT", "reason": "Data tidak cukup (butuh 200 baris)"}
+        return {"signal": "WAIT", "reason": "Data tidak cukup (butuh 200 baris)", "entry_score": 0, "support": 0, "resistance": 0}
 
     regime = detect_regime(df)
     last = df.iloc[-1]
@@ -416,9 +416,9 @@ def signal_engine(df):
     
     # 1. Liquidity & Volatility Check (Wajib untuk semua)
     if last['volume'] * last['close'] < MIN_AVG_VALUE:
-        return {"signal": "WAIT", "reason": "Likuiditas Terlalu Rendah"}
+        return {"signal": "WAIT", "reason": "Likuiditas Terlalu Rendah", "entry_score": 0, "support": last["bb_lower"], "resistance": last["bb_upper"]}
     if last['close'] < 50:
-        return {"signal": "WAIT", "reason": "Saham Gocap / Penny Stock"}
+        return {"signal": "WAIT", "reason": "Saham Gocap / Penny Stock", "entry_score": 0, "support": last["bb_lower"], "resistance": last["bb_upper"]}
         
     score = 0
     reason = []
@@ -453,12 +453,12 @@ def signal_engine(df):
             score += 85
             reason.append("Flash Crash Reversal (Deep Discount)")
         else:
-            return {"signal": "WAIT", "reason": "Regime BEAR: Cash is King (Tidak Trading)"}
+            return {"signal": "WAIT", "reason": "Regime BEAR: Cash is King (Tidak Trading)", "entry_score": 0, "support": last["bb_lower"], "resistance": last["bb_upper"]}
 
     if score >= 80:
-        return {"signal": "ENTRY CANDIDATE", "reason": f"Regime {regime} | " + " + ".join(reason)}
+        return {"signal": "ENTRY CANDIDATE", "reason": f"Regime {regime} | " + " + ".join(reason), "entry_score": score, "support": last["bb_lower"], "resistance": last["bb_upper"]}
     else:
-        return {"signal": "WAIT", "reason": f"Regime {regime} | Mencari Setup Probabilitas Tinggi..."}
+        return {"signal": "WAIT", "reason": f"Regime {regime} | Mencari Setup Probabilitas Tinggi...", "entry_score": score, "support": last["bb_lower"], "resistance": last["bb_upper"]}
 
 
 def penetration_engine(df):
