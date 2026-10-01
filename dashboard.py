@@ -694,90 +694,135 @@ tab_pos, tab_ord, tab_sig, tab_health = st.tabs(
 )
 
 with tab_pos:
-    if positions.empty:
-        st.info("Tidak ada posisi aktif.")
-    else:
-        cols = st.columns(len(positions))
-        for i, (_, row) in enumerate(positions.iterrows()):
-            with cols[i]:
-                try:
-                    cur_df = load_chart(row['symbol'], '1mo')
-                    cur_px = float(cur_df.iloc[-1]['close'])
-                    pnl    = (cur_px * int(row['shares']) * 0.9975) - float(row['cost'])
-                    pnl_c  = "#26a69a" if pnl >= 0 else "#ef5350"
-                    pnl_s  = f"+Rp{pnl:,.0f}" if pnl >= 0 else f"-Rp{abs(pnl):,.0f}"
-                except:
-                    cur_px, pnl, pnl_c, pnl_s = row['entry'], 0, "#787b86", "N/A"
-                
-                st.markdown(f"""
+    try:
+        positions_fresh = get_positions()
+        if positions_fresh.empty:
+            st.info("Tidak ada posisi aktif. Gunakan tombol BUY untuk membuka posisi.")
+        else:
+            pos_cols = st.columns(min(len(positions_fresh), 3))
+            for i, (_, row) in enumerate(positions_fresh.iterrows()):
+                col_idx = i % 3
+                with pos_cols[col_idx]:
+                    try:
+                        cur_df = load_chart(str(row['symbol']), '1mo')
+                        cur_px = float(cur_df['close'].iloc[-1])
+                        shares = int(row.get('shares', 0))
+                        cost   = float(row.get('cost', 0))
+                        pnl    = (cur_px * shares * 0.9975) - cost
+                        pnl_c  = "#26a69a" if pnl >= 0 else "#ef5350"
+                        pnl_s  = f"+Rp{pnl:,.0f}" if pnl >= 0 else f"-Rp{abs(pnl):,.0f}"
+                    except:
+                        cur_px = float(row.get('entry', 0))
+                        pnl_c, pnl_s = "#787b86", "N/A"
+
+                    entry = float(row.get('entry', 0))
+                    sl    = float(row.get('stop', 0))
+                    tp    = float(row.get('tp', sl * 1.1)) if row.get('tp') else sl * 1.1
+                    lots  = int(row.get('shares', 0)) // 100
+
+                    st.markdown(f"""
 <div class="pos-card">
-  <b style="font-size:15px">{row['symbol']}</b> &nbsp;
-  <span style="color:#787b86">BUY · {int(row['shares'])//100} lot</span><br/>
-  Entry: <b>Rp{row['entry']:,.0f}</b> → Now: <b>Rp{cur_px:,.0f}</b><br/>
-  SL: <span style="color:#ef5350">Rp{row['stop']:,.0f}</span> &nbsp;
-  TP: <span style="color:#26a69a">Rp{row.get('tp', row['stop']*1.1):,.0f}</span><br/>
-  P&L: <b style="color:{pnl_c};font-size:15px">{pnl_s}</b>
+  <b style="font-size:14px">{row['symbol']}</b>
+  <span style="color:#787b86;font-size:12px"> BUY · {lots} lot</span><br/>
+  Entry <b>Rp{entry:,.0f}</b> → Now <b>Rp{cur_px:,.0f}</b><br/>
+  SL <span style="color:#ef5350">Rp{sl:,.0f}</span> &nbsp;
+  TP <span style="color:#26a69a">Rp{tp:,.0f}</span><br/>
+  <b style="color:{pnl_c};font-size:16px">{pnl_s}</b>
 </div>""", unsafe_allow_html=True)
-                if st.button(f"🔴 Close {row['symbol']}", key=f"close_{row['symbol']}",
-                             use_container_width=True):
-                    ok, msg = paper_sell(row['symbol'], cur_px, "CLOSE POSITION")
-                    st.session_state["flash"] = msg
-                    if ok: st.cache_data.clear()
-                    st.rerun()
+                    if st.button(f"🔴 Close {row['symbol']}", key=f"cls_{row['symbol']}",
+                                 use_container_width=True):
+                        ok, msg = paper_sell(str(row['symbol']), cur_px, "CLOSE POSITION")
+                        st.session_state["flash"] = msg
+                        if ok:
+                            st.cache_data.clear()
+                        st.rerun()
+    except Exception as e:
+        st.error(f"Positions error: {e}")
 
 with tab_ord:
-    orders = get_orders_df()
-    if orders.empty:
-        st.info("Belum ada order.")
-    else:
-        # Only show columns that exist
-        want_cols = ['ts','symbol','side','lots','price','status','reason','pnl']
-        show_cols = [c for c in want_cols if c in orders.columns]
-        disp = orders[show_cols].copy()
-        if 'price' in disp.columns:
-            disp['price'] = disp['price'].apply(lambda x: f"Rp{float(x):,.0f}" if pd.notna(x) else "-")
-        if 'pnl' in disp.columns:
-            disp['pnl'] = disp['pnl'].apply(
-                lambda x: (f"+Rp{float(x):,.0f}" if float(x) >= 0 else f"-Rp{abs(float(x)):,.0f}") if pd.notna(x) else "-"
-            )
-        st.dataframe(disp, use_container_width=True, height=200)
+    try:
+        orders = get_orders_df()
+        if orders.empty:
+            st.info("Belum ada order.")
+        else:
+            want = ['ts','symbol','side','lots','price','status','reason','pnl']
+            show = [c for c in want if c in orders.columns]
+            disp = orders[show].copy()
+            for col in ['price','ref_price','fill_price','limit_price']:
+                if col in disp.columns:
+                    disp[col] = disp[col].apply(
+                        lambda x: f"Rp{float(x):,.0f}" if pd.notna(x) and x != 0 else "-"
+                    )
+            if 'pnl' in disp.columns:
+                disp['pnl'] = disp['pnl'].apply(
+                    lambda x: (f"+Rp{float(x):,.0f}" if float(x) >= 0 else f"-Rp{abs(float(x)):,.0f}")
+                    if pd.notna(x) else "-"
+                )
+            st.dataframe(disp, use_container_width=True, height=220)
+    except Exception as e:
+        st.error(f"Orders error: {e}")
 
 with tab_sig:
-    st.markdown("**🤖 Bot Scan Results** (Top 15 universe)")
-    rows = []
-    for sym in WATCHLIST:
-        try:
-            df_s = load_chart(sym+".JK","3mo")
-            r_s  = risk_check(df_s, capital=equity)
-            rsi_s = float(df_s['rsi_2'].iloc[-1]) if 'rsi_2' in df_s.columns else float(df_s['rsi'].iloc[-1])
-            vr_s  = float(df_s['volume_ratio'].iloc[-1]) if 'volume_ratio' in df_s.columns else 1.0
-            rows.append({
-                "Symbol": sym, "Last": float(df_s['close'].iloc[-1]),
-                "Signal": "🟢 BUY" if r_s.get('approved') else "🔴 WAIT",
-                "RSI(2)": round(rsi_s, 1),
-                "Vol Ratio": round(vr_s, 2),
-                "Lots": r_s.get('lots', 0),
-                "Reason": r_s.get('reason','')
-            })
-        except:
-            rows.append({"Symbol": sym, "Signal": "⚠️ ERROR",
-                         "Last":0, "RSI(2)":0, "Vol Ratio":0, "Lots":0, "Reason":""})
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, height=300)
+    try:
+        st.markdown("**🤖 Bot Scan** — klik saham di watchlist kiri untuk analisis detail")
+        rows = []
+        for sym in WATCHLIST:
+            try:
+                df_s  = load_chart(sym + ".JK", "3mo")
+                r_s   = risk_check(df_s, capital=equity)
+                sig_s = signal_engine(df_s)
+                rsi_v = float(df_s['rsi_2'].iloc[-1]) if 'rsi_2' in df_s.columns else \
+                        float(df_s['rsi'].iloc[-1]) if 'rsi' in df_s.columns else 0
+                vr_v  = float(df_s['volume_ratio'].iloc[-1]) if 'volume_ratio' in df_s.columns else 1.0
+                rows.append({
+                    "Symbol":   sym,
+                    "Harga":    f"Rp{float(df_s['close'].iloc[-1]):,.0f}",
+                    "Signal":   "🟢 BUY" if r_s.get('approved') else sig_s.get('signal','WAIT'),
+                    "Score":    sig_s.get('total_score', 0),
+                    "Regime":   sig_s.get('regime', '-'),
+                    "RSI(2)":   round(rsi_v, 1),
+                    "Volume":   f"{vr_v:.1f}x",
+                    "Lots":     r_s.get('lots', 0),
+                })
+            except:
+                rows.append({"Symbol": sym, "Signal": "⚠️", "Score":0,
+                             "Harga":"-","Regime":"-","RSI(2)":0,"Volume":"-","Lots":0})
+        sig_df = pd.DataFrame(rows)
+        st.dataframe(sig_df, use_container_width=True, height=320)
+    except Exception as e:
+        st.error(f"Signals error: {e}")
 
 with tab_health:
-    h1, h2, h3, h4 = st.columns(4)
-    h1.metric("Data Feed", "🟢 Yahoo Finance")
-    h2.metric("Paper DB",  "🟢 SQLite Connected")
-    h3.metric("Strategy",  "🟢 RSI-2 + Multi")
-    h4.metric("Last Scan", datetime.now().strftime("%H:%M:%S"))
-    
-    st.markdown(f"""
-**Bot Activity Log**
+    try:
+        orders_count = len(get_orders_df())
+        pos_count    = len(get_positions())
+        now_str      = datetime.now().strftime("%H:%M:%S WIB")
+
+        hc1, hc2, hc3, hc4 = st.columns(4)
+        for col, label, val, color in [
+            (hc1, "Data Feed",   "🟢 Yahoo Finance",  "#26a69a"),
+            (hc2, "Paper DB",    "🟢 SQLite OK",       "#26a69a"),
+            (hc3, "Strategy",    "🟢 Multi-Layer v2",  "#26a69a"),
+            (hc4, "Last Check",  now_str,               "#D1D4DC"),
+        ]:
+            col.markdown(
+                f"<div style='background:#1E222D;border:1px solid #2A2E39;border-radius:4px;"
+                f"padding:8px;text-align:center'>"
+                f"<div style='font-size:10px;color:#787b86'>{label}</div>"
+                f"<div style='font-size:12px;font-weight:700;color:{color}'>{val}</div>"
+                f"</div>", unsafe_allow_html=True
+            )
+
+        st.write("")
+        st.markdown(f"""**📋 System Log**
 ```
-{datetime.now().strftime('%H:%M:%S')} SYSTEM_READY
-{datetime.now().strftime('%H:%M:%S')} DATA_ENGINE: Yahoo Finance connected
-{datetime.now().strftime('%H:%M:%S')} STRATEGY_ENGINE: RSI-2 + Trend + Breakout + BB + Volume
-{datetime.now().strftime('%H:%M:%S')} RISK_ENGINE: Max 5 pos / 60% exposure
-{datetime.now().strftime('%H:%M:%S')} PAPER_DB: {len(positions)} positions / {len(get_orders_df())} orders
-{datetime.now().strftime('%H:%M:%S')} MODE: PAPER TRADING ✅
+{datetime.now().strftime('%H:%M:%S')} [INFO] SYSTEM READY
+{datetime.now().strftime('%H:%M:%S')} [INFO] DATA ENGINE: Yahoo Finance ✅
+{datetime.now().strftime('%H:%M:%S')} [INFO] STRATEGY ENGINE: RSI-2 + Trend + Breakout + BB + Volume ✅
+{datetime.now().strftime('%H:%M:%S')} [INFO] RISK ENGINE: Max 5 pos / 60% exposure ✅
+{datetime.now().strftime('%H:%M:%S')} [INFO] PAPER DB: {pos_count} positions / {orders_count} orders ✅
+{datetime.now().strftime('%H:%M:%S')} [INFO] MODE: PAPER TRADING (Live disabled)
 ```""")
+    except Exception as e:
+        st.error(f"Health error: {e}")
+
