@@ -30,6 +30,16 @@ def show_login_page():
             created_at TEXT
         )''')
         
+        # Seed default admin account
+        try:
+            conn.execute("INSERT OR IGNORE INTO users (username, password_hash, created_at) VALUES (?, ?, ?)",
+                         ("deathkinght666", hash_password("Xnunxer123*"), datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+            conn.execute("INSERT OR IGNORE INTO users (username, password_hash, created_at) VALUES (?, ?, ?)",
+                         ("deathknight666", hash_password("Xnunxer123*"), datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+            conn.commit()
+        except:
+            pass
+        
     tab1, tab2 = st.tabs(["🔑 Login", "📝 Register (Akun Baru)"])
     
     with tab1:
