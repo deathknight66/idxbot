@@ -934,17 +934,31 @@ if not scan_df.empty:
                         if pos_exists:
                             st.error(f"Saham {symbol} sudah ada di portofolio. Jual (Close Position) terlebih dahulu sebelum membeli lagi!")
                         else:
-                            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                            conn.execute(
-                                "INSERT INTO orders (signal_date, symbol, side, lots, ref_price, status, reason) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                                (now, symbol, "BUY", int(risk['lots']), float(risk['entry']), "FILLED", "MANUAL DASHBOARD BUY")
-                            )
+                            # Cek sisa saldo tunai (Cash Management)
+                            conn.execute('''CREATE TABLE IF NOT EXISTS kv(k TEXT PRIMARY KEY, v REAL)''')
+                            cash_row = conn.execute("SELECT v FROM kv WHERE k='cash'").fetchone()
+                            available_cash = float(cash_row[0]) if cash_row else INITIAL_CAPITAL
+                            
                             shares = int(risk['lots'] * 100)
-                            conn.execute(
-                                "INSERT INTO positions (symbol, shares, entry, stop, entry_date, cost) VALUES (?, ?, ?, ?, ?, ?)",
-                                (symbol, shares, float(risk['entry']), float(risk['stop_loss']), now, float(risk['estimated_value']))
-                            )
-                            st.success(f"Order BUY {symbol} berhasil dieksekusi secara simulasi dan masuk ke paper.db!")
+                            entry_price = float(risk['entry'])
+                            gross_cost = shares * entry_price
+                            buy_fee = gross_cost * 0.0015
+                            total_cost = gross_cost + buy_fee
+                            
+                            if available_cash < total_cost:
+                                st.error(f"Saldo Kas tidak cukup! Butuh Rp {total_cost:,.0f} tapi saldo hanya Rp {available_cash:,.0f}.")
+                            else:
+                                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                conn.execute(
+                                    "INSERT INTO orders (signal_date, symbol, side, lots, ref_price, status, reason) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                                    (now, symbol, "BUY", int(risk['lots']), entry_price, "FILLED", "MANUAL DASHBOARD BUY")
+                                )
+                                conn.execute(
+                                    "INSERT INTO positions (symbol, shares, entry, stop, entry_date, cost) VALUES (?, ?, ?, ?, ?, ?)",
+                                    (symbol, shares, entry_price, float(risk['stop_loss']), now, total_cost)
+                                )
+                                conn.execute("UPDATE kv SET v = v - ? WHERE k='cash'", (total_cost,))
+                                st.success(f"Order BUY {symbol} berhasil dieksekusi secara simulasi dan masuk ke paper.db!")
                 except Exception as ex:
                     st.error(f"Gagal mengeksekusi order: {ex}")
 
@@ -969,7 +983,6 @@ if not scan_df.empty:
 
 st.header("3. PnL Monitoring")
 
-# Membaca riwayat order sungguhan dari SQLite Paper Trading
 import sqlite3
 from pathlib import Path
 import os
@@ -979,7 +992,6 @@ os.makedirs("data", exist_ok=True)
 
 try:
     with sqlite3.connect(db_path) as conn:
-        # Buat tabel jika belum ada (untuk mencegah error pada run pertama)
         conn.execute('''CREATE TABLE IF NOT EXISTS orders(
             id INTEGER PRIMARY KEY AUTOINCREMENT, signal_date TEXT, symbol TEXT,
             side TEXT, lots INTEGER, ref_price REAL, limit_price REAL,
@@ -988,67 +1000,76 @@ try:
         conn.execute('''CREATE TABLE IF NOT EXISTS positions(
             symbol TEXT PRIMARY KEY, shares INTEGER, entry REAL, stop REAL,
             entry_date TEXT, last_checked TEXT, cost REAL)''')
+        conn.execute('''CREATE TABLE IF NOT EXISTS kv(k TEXT PRIMARY KEY, v REAL)''')
+        
+        # Inisialisasi modal awal jika kosong
+        if conn.execute("SELECT 1 FROM kv WHERE k='cash'").fetchone() is None:
+            conn.execute("INSERT INTO kv VALUES('cash', ?)", (INITIAL_CAPITAL,))
+            conn.commit()
             
         portfolio = pd.read_sql("SELECT * FROM positions", conn)
         trades = pd.read_sql("SELECT * FROM orders WHERE status='FILLED'", conn)
+        cash_row = conn.execute("SELECT v FROM kv WHERE k='cash'").fetchone()
+        available_cash = float(cash_row[0]) if cash_row else 0
         
     if portfolio.empty and trades.empty:
         st.info("Belum ada posisi paper trading. Coba klik 'EXECUTE BUY' pada saham pilihan di atas.")
-    else:
-        total_pnl = trades["pnl"].sum() if ('pnl' in trades.columns and not trades['pnl'].isna().all()) else 0
-        open_capital = portfolio["cost"].sum() if ('cost' in portfolio.columns and not portfolio.empty) else 0
-        
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Realized PnL (Closed Trades)", f"Rp {total_pnl:,.0f}")
-        c2.metric("Total Open Capital", f"Rp {open_capital:,.0f}")
-        c3.metric("Total Executed Trades", len(trades))
-        
-        st.subheader("Aktif / Open Positions")
-        st.dataframe(portfolio, use_container_width=True)
-        
-        # --- CLOSE POSITION FEATURE ---
-        if not portfolio.empty:
-            st.write("---")
-            st.write("**Close Position (Sell)**")
-            sell_col1, sell_col2 = st.columns([3, 1])
-            sell_symbol = sell_col1.selectbox("Pilih saham untuk dijual", portfolio["symbol"].tolist())
-            if sell_col2.button("FORCE SELL"):
-                try:
-                    # Ambil harga terkini untuk kalkulasi PnL
-                    latest_df = get_market_data(sell_symbol, period="1mo", interval="1d")
-                    current_price = float(latest_df.iloc[-1]['close'])
-                    
-                    pos_row = portfolio[portfolio["symbol"] == sell_symbol].iloc[0]
-                    entry_price = float(pos_row["entry"])
-                    shares = int(pos_row["shares"])
-                    
-                    pnl = float((current_price - entry_price) * shares)
-                    lots = int(shares // 100)
-                    
-                    from datetime import datetime
-                    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    
-                    with sqlite3.connect("data/paper.db") as conn:
-                        # Masukkan SELL ke order dengan PnL
-                        conn.execute(
-                            "INSERT INTO orders (signal_date, symbol, side, lots, ref_price, status, pnl) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                            (now, sell_symbol, "SELL", lots, current_price, "FILLED", pnl)
-                        )
-                        # Hapus posisi
-                        conn.execute("DELETE FROM positions WHERE symbol=?", (sell_symbol,))
-                    
-                    st.success(f"Berhasil menjual {sell_symbol} di Rp{current_price:,.0f}. Realized PnL: Rp{pnl:,.0f}")
-                    st.rerun()
-                except Exception as ex:
-                    st.error(f"Gagal menjual {sell_symbol}: {ex}")
-        
+    
+    total_pnl = pd.to_numeric(trades["pnl"], errors='coerce').sum() if ('pnl' in trades.columns) else 0
+    open_capital = pd.to_numeric(portfolio["cost"], errors='coerce').sum() if ('cost' in portfolio.columns and not portfolio.empty) else 0
+    
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Available Cash", f"Rp {available_cash:,.0f}")
+    c2.metric("Total Open Capital", f"Rp {open_capital:,.0f}")
+    c3.metric("Net Realized PnL (After Fee)", f"Rp {total_pnl:,.0f}")
+    c4.metric("Executed Trades", len(trades))
+    
+    st.subheader("Aktif / Open Positions")
+    st.dataframe(portfolio, use_container_width=True)
+    
+    # --- CLOSE POSITION FEATURE ---
+    if not portfolio.empty:
         st.write("---")
-        st.subheader("Trade History (Closed & Filled Orders)")
-        
-        # Format the dataframe to display cleanly
-        display_trades = trades.copy()
-        display_trades = display_trades.sort_values("id", ascending=False).head(20)
-        st.dataframe(display_trades, use_container_width=True)
+        st.write("**Close Position (Sell)**")
+        sell_col1, sell_col2 = st.columns([3, 1])
+        sell_symbol = sell_col1.selectbox("Pilih saham untuk dijual", portfolio["symbol"].tolist())
+        if sell_col2.button("FORCE SELL"):
+            try:
+                latest_df = get_market_data(sell_symbol, period="1mo", interval="1d")
+                current_price = float(latest_df.iloc[-1]['close'])
+                
+                pos_row = portfolio[portfolio["symbol"] == sell_symbol].iloc[0]
+                shares = int(pos_row["shares"])
+                cost = float(pos_row["cost"]) # Biaya beli (termasuk fee 0.15%)
+                
+                # Fee Jual (0.25%)
+                gross_value = current_price * shares
+                sell_fee = gross_value * 0.0025
+                net_receive = gross_value - sell_fee
+                pnl = float(net_receive - cost)
+                lots = int(shares // 100)
+                
+                from datetime import datetime
+                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                
+                with sqlite3.connect("data/paper.db") as conn:
+                    conn.execute("INSERT INTO orders (signal_date, symbol, side, lots, ref_price, status, pnl) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (now, sell_symbol, "SELL", lots, current_price, "FILLED", pnl))
+                    conn.execute("DELETE FROM positions WHERE symbol=?", (sell_symbol,))
+                    # Update Cash
+                    conn.execute("UPDATE kv SET v = v + ? WHERE k='cash'", (net_receive,))
+                
+                st.success(f"Berhasil menjual {sell_symbol} di Rp{current_price:,.0f}. Net PnL (setelah fee): Rp{pnl:,.0f}")
+                st.rerun()
+            except Exception as ex:
+                st.error(f"Gagal menjual {sell_symbol}: {ex}")
+    
+    st.write("---")
+    st.subheader("Trade History (Closed & Filled Orders)")
+    
+    display_trades = trades.copy()
+    display_trades = display_trades.sort_values("id", ascending=False).head(20)
+    st.dataframe(display_trades, use_container_width=True)
 
 except Exception as e:
     st.info(f"Database error: {e}")

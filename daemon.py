@@ -1,7 +1,9 @@
 import time
 import logging
 import sqlite3
+import traceback
 from datetime import datetime
+from notifier import send_telegram_message
 
 UNIVERSE = [
     # Banking
@@ -85,7 +87,12 @@ def run_cycle():
                     reason = "TAKE PROFIT HIT"
                     
                 if reason:
-                    pnl = float((current_price - entry) * shares)
+                    gross_value = current_price * shares
+                    sell_fee = gross_value * 0.0025
+                    net_receive = gross_value - sell_fee
+                    
+                    cost = float(pos['cost'])
+                    pnl = float(net_receive - cost)
                     lots = int(shares // 100)
                     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     
@@ -95,7 +102,11 @@ def run_cycle():
                             (now, symbol, "SELL", lots, current_price, "FILLED", reason, pnl)
                         )
                         conn.execute("DELETE FROM positions WHERE symbol=?", (symbol,))
-                    logger.warning(f"[{symbol}] AUTO-SELL DIEKSEKUSI: {reason}. Terjual @ Rp {current_price:,.0f} | PnL: Rp {pnl:,.0f}")
+                        conn.execute("UPDATE kv SET v = v + ? WHERE k='cash'", (net_receive,))
+                    logger.warning(f"[{symbol}] AUTO-SELL DIEKSEKUSI: {reason}. Terjual @ Rp {current_price:,.0f} | Net PnL: Rp {pnl:,.0f}")
+                    
+                    msg = f"📉 *AUTO-SELL: {symbol}*\nReason: {reason}\nPrice: Rp {current_price:,.0f}\nPnL: Rp {pnl:,.0f}"
+                    send_telegram_message(msg)
                 else:
                     logger.info(f"[{symbol}] Hold. Current: {current_price:,.0f} | SL: {stop_loss:,.0f} | TP: {take_profit:,.0f}")
             except Exception as e:
@@ -120,13 +131,25 @@ def run_cycle():
                 risk = risk_check(df, capital=INITIAL_CAPITAL)
                 
                 if risk["approved"]:
-                    # EXECUTE BUY
-                    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    # Cek kas
+                    with sqlite3.connect(DB_PATH) as conn:
+                        cash_row = conn.execute("SELECT v FROM kv WHERE k='cash'").fetchone()
+                        available_cash = float(cash_row[0]) if cash_row else INITIAL_CAPITAL
+                    
                     shares = int(risk['lots'] * 100)
                     lots = int(risk['lots'])
                     entry_price = float(risk['entry'])
                     stop_loss_price = float(risk['stop_loss'])
-                    est_val = float(risk['estimated_value'])
+                    
+                    gross_cost = shares * entry_price
+                    buy_fee = gross_cost * 0.0015
+                    total_cost = float(gross_cost + buy_fee)
+                    
+                    if available_cash < total_cost:
+                        logger.warning(f"[{symbol}] AUTO-BUY BATAL: Kas tidak cukup! Butuh Rp{total_cost:,.0f}, Saldo Rp{available_cash:,.0f}")
+                        continue
+                    
+                    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     
                     with sqlite3.connect(DB_PATH) as conn:
                         conn.execute(
@@ -135,9 +158,14 @@ def run_cycle():
                         )
                         conn.execute(
                             "INSERT OR REPLACE INTO positions (symbol, shares, entry, stop, entry_date, cost) VALUES (?, ?, ?, ?, ?, ?)",
-                            (symbol, shares, entry_price, stop_loss_price, now, est_val)
+                            (symbol, shares, entry_price, stop_loss_price, now, total_cost)
                         )
-                    logger.info(f"[{symbol}] AUTO-BUY DIEKSEKUSI: {lots} lot @ Rp {entry_price:,.0f}")
+                        conn.execute("UPDATE kv SET v = v - ? WHERE k='cash'", (total_cost,))
+                    logger.info(f"[{symbol}] AUTO-BUY DIEKSEKUSI: {lots} lot @ Rp {entry_price:,.0f} | Biaya+Fee: Rp {total_cost:,.0f}")
+                    
+                    msg = f"🚀 *AUTO-BUY: {symbol}*\nLots: {lots}\nEntry: Rp {entry_price:,.0f}\nStop Loss: Rp {stop_loss_price:,.0f}"
+                    send_telegram_message(msg)
+                    
                     # Update active_symbols agar tidak dibeli lagi di iterasi yang sama
                     active_symbols.append(symbol)
                 else:
