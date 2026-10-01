@@ -234,6 +234,7 @@ def calculate_indicators(df):
         - 2 * df["bb_std"]
     )
 
+    df["high_20"] = df["high"].rolling(20).max()
     df["bb_width"] = (
         (df["bb_upper"] - df["bb_lower"])
         / df["bb_middle"]
@@ -402,63 +403,88 @@ def calculate_range(df):
 
 
 
+
 def signal_engine(df):
     """
-    Signal Engine (High-Probability Algorithmic Trading)
-    Mengkombinasikan Mark Minervini Trend Template & Larry Connors RSI 2 Mean Reversion.
+    IDXBot Multi-Strategy Scoring Engine
+    Menggabungkan 5 sub-strategi (RSI-2, Trend, Breakout, Mean Reversion, Volume).
     """
     if len(df) < 200:
         return {"signal": "WAIT", "reason": "Data tidak cukup (butuh 200 baris)", "entry_score": 0, "support": 0, "resistance": 0}
 
-    regime = detect_regime(df)
     last = df.iloc[-1]
     prev = df.iloc[-2]
     
-    # 1. Liquidity & Volatility Check (Wajib untuk semua)
+    # 1. NO-TRADE ENGINE
     if last['volume'] * last['close'] < MIN_AVG_VALUE:
-        return {"signal": "WAIT", "reason": "Likuiditas Terlalu Rendah", "entry_score": 0, "support": last["bb_lower"], "resistance": last["bb_upper"]}
+        return {"signal": "WAIT", "reason": "No-Trade: Low Liquidity", "entry_score": 0, "support": last['bb_lower'], "resistance": last['bb_upper']}
     if last['close'] < 50:
-        return {"signal": "WAIT", "reason": "Saham Gocap / Penny Stock", "entry_score": 0, "support": last["bb_lower"], "resistance": last["bb_upper"]}
-        
-    score = 0
-    reason = []
+        return {"signal": "WAIT", "reason": "No-Trade: Penny Stock", "entry_score": 0, "support": last['bb_lower'], "resistance": last['bb_upper']}
+    if last['volatility'] > 1.0: # Volatilitas tahunan ekstrim (>100%)
+        return {"signal": "WAIT", "reason": "No-Trade: Extreme Volatility", "entry_score": 0, "support": last['bb_lower'], "resistance": last['bb_upper']}
+
+    # 2. MARKET REGIME ENGINE
+    regime = detect_regime(df)
+    if regime == "BEAR":
+        # Di pasar turun, NO TRADE adalah keputusan terbaik
+        return {"signal": "WAIT", "reason": "No-Trade: Bear Market (Defensive/Cash)", "entry_score": 0, "support": last['bb_lower'], "resistance": last['bb_upper']}
+
+    # 3. STRATEGY SCORING ENGINE
+    scores = {
+        "trend": 0,
+        "rsi_2": 0,
+        "volume": 0,
+        "breakout": 0,
+        "mean_reversion": 0,
+        "regime": 20 if regime == "BULL" else 10 if regime == "SIDEWAYS" else 0,
+        "liquidity": 10 if last['volume'] * last['close'] > MIN_AVG_VALUE * 2 else 5
+    }
     
-    if regime == "BULL":
-        # STRATEGI 1: Connors RSI 2 Pullback (Win Rate Tinggi)
-        # Beli saat tren jangka panjang naik, tapi terjadi panic selling jangka pendek ekstrem
-        if last['rsi_2'] < 10:
-            score += 60
-            reason.append("Connors RSI-2 Extreme Pullback (<10)")
-            
-        if last['close'] < last['bb_lower']:
-            score += 30
-            reason.append("Harga menembus Bollinger Bawah (Oversold)")
-            
-        # STRATEGI 2: Minervini Volatility Contraction / Breakout
-        if last['close'] > prev['bb_upper'] and last['volume'] > last['volume_ma20'] * 2:
-            score += 90
-            reason.append("Minervini Breakout dengan Volume Tinggi")
+    reasons = [f"Regime: {regime}"]
 
-    elif regime == "SIDEWAYS":
-        # STRATEGI 3: Standard Mean Reversion Range Trading
-        if last['rsi'] < 30 and last['close'] < last['bb_lower']:
-            score += 85
-            reason.append("Oversold di Support Sideways (Mean Reversion)")
-            
-    elif regime == "BEAR":
-        # STRATEGI 4: Defensive Cash
-        # Di pasar beruang, probabilitas saham naik sangat kecil.
-        # Kita hanya beli jika terjadi anomali 'Flash Crash' yang sangat ekstrem.
-        if last['rsi_2'] < 2 and last['close'] < last['bb_lower'] * 0.90:
-            score += 85
-            reason.append("Flash Crash Reversal (Deep Discount)")
-        else:
-            return {"signal": "WAIT", "reason": "Regime BEAR: Cash is King (Tidak Trading)", "entry_score": 0, "support": last["bb_lower"], "resistance": last["bb_upper"]}
+    # Strat 1: Connors RSI-2 (Buy oversold pullback in uptrend)
+    if last['close'] > last['ma200'] and last['rsi_2'] < 10:
+        scores["rsi_2"] += 25
+        reasons.append("RSI-2 Pullback")
+        
+    # Strat 2: Trend Following (Strong momentum)
+    if last['ma20'] > last['ma50'] > last['ma200'] and last['close'] > last['ma20']:
+        scores["trend"] += 20
+        reasons.append("Strong Trend")
+        
+    # Strat 3: Breakout Momentum (New Highs)
+    if last['close'] > prev['high_20']:
+        scores["breakout"] += 15
+        reasons.append("20D Breakout")
+        
+    # Strat 4: Bollinger Mean Reversion (Buy at Support)
+    if regime == "SIDEWAYS" and last['close'] < last['bb_lower'] and last['rsi'] < 35:
+        scores["mean_reversion"] += 25
+        reasons.append("BB Mean Reversion")
+        
+    # Strat 5: Volume Confirmation (Smart money)
+    if last['volume'] > last['volume_ma20'] * 1.5:
+        scores["volume"] += 15
+        reasons.append("High Volume")
 
-    if score >= 80:
-        return {"signal": "ENTRY CANDIDATE", "reason": f"Regime {regime} | " + " + ".join(reason), "entry_score": score, "support": last["bb_lower"], "resistance": last["bb_upper"]}
+    total_score = sum(scores.values())
+    
+    if total_score >= 80:
+        return {
+            "signal": "ENTRY CANDIDATE", 
+            "reason": " + ".join(reasons), 
+            "entry_score": total_score, 
+            "support": last["bb_lower"], 
+            "resistance": last["bb_upper"]
+        }
     else:
-        return {"signal": "WAIT", "reason": f"Regime {regime} | Mencari Setup Probabilitas Tinggi...", "entry_score": score, "support": last["bb_lower"], "resistance": last["bb_upper"]}
+        return {
+            "signal": "WAIT", 
+            "reason": f"Score {total_score}/100. Need >= 80", 
+            "entry_score": total_score, 
+            "support": last["bb_lower"], 
+            "resistance": last["bb_upper"]
+        }
 
 
 def penetration_engine(df):
