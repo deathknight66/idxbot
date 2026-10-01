@@ -84,6 +84,54 @@ def get_market_data(symbol, period="3y", interval="1d"):
         ]
 
         df = df[required].dropna()
+        
+        # ==========================================
+        # REAL-TIME PATCH VIA TRADINGVIEW (0 DELAY)
+        # ==========================================
+        try:
+            from tradingview_ta import TA_Handler, Interval
+            from datetime import datetime
+            
+            tv_symbol = symbol.replace(".JK", "")
+            handler = TA_Handler(
+                symbol=tv_symbol,
+                screener="indonesia",
+                exchange="IDX",
+                interval=Interval.INTERVAL_1_DAY
+            )
+            analysis = handler.get_analysis()
+            inds = analysis.indicators
+            
+            rt_open = float(inds.get("open", df.iloc[-1]['open']))
+            rt_high = float(inds.get("high", df.iloc[-1]['high']))
+            rt_low = float(inds.get("low", df.iloc[-1]['low']))
+            rt_close = float(inds.get("close", df.iloc[-1]['close']))
+            rt_volume = float(inds.get("volume", df.iloc[-1]['volume']))
+            
+            if rt_close > 0:
+                today_date = pd.to_datetime(datetime.now().date())
+                last_dt = df.index[-1]
+                
+                if last_dt.date() == today_date.date():
+                    # Overwrite bar hari ini dengan data real-time
+                    df.loc[last_dt, "open"] = rt_open
+                    df.loc[last_dt, "high"] = rt_high
+                    df.loc[last_dt, "low"] = rt_low
+                    df.loc[last_dt, "close"] = rt_close
+                    df.loc[last_dt, "volume"] = rt_volume
+                else:
+                    # Append bar hari ini karena yfinance belum update harian
+                    new_row = pd.DataFrame({
+                        "open": [rt_open],
+                        "high": [rt_high],
+                        "low": [rt_low],
+                        "close": [rt_close],
+                        "volume": [rt_volume]
+                    }, index=[today_date])
+                    df = pd.concat([df, new_row])
+                    
+        except Exception as tv_e:
+            logger.warning(f"TradingView real-time patch failed for {symbol}: {tv_e}")
 
         return df
 
