@@ -72,7 +72,7 @@ def run_cycle():
             
             try:
                 df = get_market_data(symbol, period="1mo")
-                current_price = df.iloc[-1]['close']
+                current_price = float(df.iloc[-1]['close'])
                 
                 # Cek Kondisi Exit
                 reason = None
@@ -82,13 +82,14 @@ def run_cycle():
                     reason = "TAKE PROFIT HIT"
                     
                 if reason:
-                    pnl = (current_price - entry) * shares
+                    pnl = float((current_price - entry) * shares)
+                    lots = int(shares // 100)
                     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     
                     with sqlite3.connect(DB_PATH) as conn:
                         conn.execute(
                             "INSERT INTO orders (signal_date, symbol, side, lots, ref_price, status, reason, pnl) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                            (now, symbol, "SELL", shares // 100, current_price, "FILLED", reason, pnl)
+                            (now, symbol, "SELL", lots, current_price, "FILLED", reason, pnl)
                         )
                         conn.execute("DELETE FROM positions WHERE symbol=?", (symbol,))
                     logger.warning(f"[{symbol}] AUTO-SELL DIEKSEKUSI: {reason}. Terjual @ Rp {current_price:,.0f} | PnL: Rp {pnl:,.0f}")
@@ -118,18 +119,22 @@ def run_cycle():
                 if risk["approved"]:
                     # EXECUTE BUY
                     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    shares = risk['lots'] * 100
+                    shares = int(risk['lots'] * 100)
+                    lots = int(risk['lots'])
+                    entry_price = float(risk['entry'])
+                    stop_loss_price = float(risk['stop_loss'])
+                    est_val = float(risk['estimated_value'])
                     
                     with sqlite3.connect(DB_PATH) as conn:
                         conn.execute(
                             "INSERT INTO orders (signal_date, symbol, side, lots, ref_price, status, reason) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                            (now, symbol, "BUY", risk['lots'], risk['entry'], "FILLED", "ENTRY CANDIDATE")
+                            (now, symbol, "BUY", lots, entry_price, "FILLED", "ENTRY CANDIDATE")
                         )
                         conn.execute(
                             "INSERT OR REPLACE INTO positions (symbol, shares, entry, stop, entry_date, cost) VALUES (?, ?, ?, ?, ?, ?)",
-                            (symbol, shares, risk['entry'], risk['stop_loss'], now, risk['estimated_value'])
+                            (symbol, shares, entry_price, stop_loss_price, now, est_val)
                         )
-                    logger.info(f"[{symbol}] AUTO-BUY DIEKSEKUSI: {risk['lots']} lot @ Rp {risk['entry']:,.0f}")
+                    logger.info(f"[{symbol}] AUTO-BUY DIEKSEKUSI: {lots} lot @ Rp {entry_price:,.0f}")
                     # Update active_symbols agar tidak dibeli lagi di iterasi yang sama
                     active_symbols.append(symbol)
                 else:

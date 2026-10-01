@@ -1006,13 +1006,14 @@ try:
                 try:
                     # Ambil harga terkini untuk kalkulasi PnL
                     latest_df = get_market_data(sell_symbol, period="1mo", interval="1d")
-                    current_price = latest_df.iloc[-1]['close']
+                    current_price = float(latest_df.iloc[-1]['close'])
                     
                     pos_row = portfolio[portfolio["symbol"] == sell_symbol].iloc[0]
-                    entry_price = pos_row["entry"]
-                    shares = pos_row["shares"]
+                    entry_price = float(pos_row["entry"])
+                    shares = int(pos_row["shares"])
                     
-                    pnl = (current_price - entry_price) * shares
+                    pnl = float((current_price - entry_price) * shares)
+                    lots = int(shares // 100)
                     
                     from datetime import datetime
                     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1021,7 +1022,7 @@ try:
                         # Masukkan SELL ke order dengan PnL
                         conn.execute(
                             "INSERT INTO orders (signal_date, symbol, side, lots, ref_price, status, pnl) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                            (now, sell_symbol, "SELL", shares // 100, current_price, "FILLED", pnl)
+                            (now, sell_symbol, "SELL", lots, current_price, "FILLED", pnl)
                         )
                         # Hapus posisi
                         conn.execute("DELETE FROM positions WHERE symbol=?", (sell_symbol,))
@@ -1033,7 +1034,11 @@ try:
         
         st.write("---")
         st.subheader("Trade History (Closed & Filled Orders)")
-        st.dataframe(trades.sort_values("id", ascending=False).head(20), use_container_width=True)
+        
+        # Format the dataframe to display cleanly
+        display_trades = trades.copy()
+        display_trades = display_trades.sort_values("id", ascending=False).head(20)
+        st.dataframe(display_trades, use_container_width=True)
 
 except Exception as e:
     st.info(f"Database error: {e}")
