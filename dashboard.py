@@ -1036,7 +1036,7 @@ health = pd.DataFrame(
         ["Universe Scanner", "🟢 RUNNING"],
         ["Penetration Engine", "🟢 RUNNING"],
         ["Risk Engine", "🟢 RUNNING"],
-        ["Execution Adapter", "🟡 NOT CONNECTED"],
+        ["Execution Adapter", "🟢 CONNECTED (PaperDB)"],
         ["Dashboard", "🟢 RUNNING"],
     ],
     columns=["Component", "Status"]
