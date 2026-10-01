@@ -1,0 +1,88 @@
+# ---- Universe & data ----
+universe: [BBCA, BBRI, BMRI, BBNI, TLKM, ASII, UNVR, ICBP, ADRO, ANTM]
+data:
+  provider: yfinance        # yfinance | csv | synthetic
+  start: "2019-01-01"
+  cache_dir: data/cache
+  csv_dir: data/csv         # file per saham: BBCA.csv (Date,Open,High,Low,Close,Volume)
+
+# ---- Strategi ----
+strategy:
+  name: sma_cross           # sma_cross | breakout | rsi | macd_cross | bollinger | combo
+  params: {fast: 20, slow: 50}
+  # breakout -> params: {entry: 20, exit: 10}
+  # rsi      -> params: {period: 14, oversold: 30, overbought: 70}
+  # macd_cross -> params: {fast: 12, slow: 26, signal: 9}
+  # bollinger  -> params: {period: 20, std_dev: 2.0}
+  # combo    -> params: {rsi_period: 14, rsi_threshold: 40, macd_fast: 12, macd_slow: 26, sma_period: 50}
+
+# ---- Portofolio & risk ----
+portfolio:
+  initial_cash: 100000000   # Rp
+  max_positions: 5
+  position_fraction: 0.20   # porsi equity per posisi
+  stop_loss_pct: 0.08       # 0 = nonaktif
+  max_daily_orders: 6
+
+# ---- Biaya (VERIFIKASI ke fee sheet Stockbit Sekuritas!) ----
+costs:
+  buy_fee: 0.0015
+  sell_fee: 0.0025          # sudah termasuk pajak final jual
+  slippage_bps: 10
+
+# ---- Aturan bursa (verifikasi ke aturan BEI terkini) ----
+idx:
+  lot_size: 100
+  ara_pct: 0.25             # penyederhanaan; aslinya bertingkat per harga
+  arb_pct: 0.15
+
+paper:
+  db_path: data/paper.db
+
+notify:
+  telegram: false           # true -> isi .env
+
+# ---- Sumber data tambahan ----
+sources:
+  goapi_key: ""             # API key dari goapi.io (gratis, daftar dulu)
+                            # Isi di .env: GOAPI_API_KEY=xxx atau langsung di sini
+
+# ---- Monitoring (python main.py monitor) ----
+monitor:
+  provider: yahoo            # yahoo | synthetic (data acak, hanya untuk tes)
+  poll_seconds: 180          # jangan terlalu rapat; sumber data tidak resmi
+  stale_minutes: 45          # data lebih tua dari ini saat jam bursa = dianggap basi
+  cooldown_minutes: 180      # alert yang sama tidak diulang sebelum ini lewat
+  daily_digest: true         # ringkasan sekali sehari setelah bursa tutup
+  db_path: data/monitor.db
+  # Jadwal sesi (WIB). VERIFIKASI ke jadwal BEI terkini; hari libur bursa tidak ditangani
+  # (bot hanya melaporkan data basi).
+  sessions:
+    mon_thu: [["09:00", "12:00"], ["13:30", "15:50"]]
+    fri:     [["09:00", "11:30"], ["14:00", "15:50"]]
+  # Aturan untuk SEMUA saham di watchlist
+  # Tipe tersedia:
+  #   price_above, price_below     — harga melewati batas
+  #   pct_move                     — pergerakan harian >= N%
+  #   volume_spike                 — volume >= Nx rata-rata 20 hari
+  #   near_limit                   — dalam N% dari ARA/ARB
+  #   gap_up, gap_down             — gap >= N%
+  #   consecutive_up, consecutive_down — N hari berturut naik/turun
+  #   rsi_oversold, rsi_overbought — RSI menembus batas
+  #   macd_cross_up, macd_cross_down — MACD line cross signal line
+  #   bb_breakout                  — close di luar Bollinger Band
+  default_rules:
+    - {type: pct_move, value: 4}        # |perubahan| >= 4% vs close kemarin
+    - {type: volume_spike, value: 2.5}  # volume >= 2.5x rata-rata 20 hari (diproyeksikan ke sesi)
+    - {type: near_limit, value: 1.0}    # dalam 1% dari batas ARA/ARB
+    - {type: rsi_oversold, value: 30}   # RSI <= 30
+    - {type: rsi_overbought, value: 70} # RSI >= 70
+    - {type: macd_cross_up, value: 1}   # MACD golden cross (value diabaikan, harus ada)
+    - {type: bb_breakout, value: 1}     # Bollinger Band breakout (value diabaikan)
+  # Aturan tambahan per saham (kosongkan [] kalau cukup default)
+  watchlist:
+    BBCA: [{type: price_below, value: 9000}, {type: consecutive_down, value: 5}]
+    BBRI: [{type: gap_up, value: 3}]
+    BMRI: []
+    TLKM: [{type: price_above, value: 3800}]
+    ASII: []
