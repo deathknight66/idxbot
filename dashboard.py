@@ -592,14 +592,20 @@ with st.expander("🧪 Buka Panel Strategy Tester (Klik di Sini)"):
                 if res:
                     st.success("✅ Backtest Selesai!")
                     
-                    st.subheader("📊 Performance Summary")
+                    st.subheader("📊 Quant Performance Summary")
                     c1, c2, c3, c4 = st.columns(4)
                     c1.metric("Win Rate", f"{res['win_rate']:.1f}%")
                     c2.metric("Total Trades", f"{res['total_trades']}")
                     c3.metric("Net Profit", f"Rp {res['net_profit']:,.0f}")
-                    c4.metric("Total Return", f"{res['total_return']:.2f}%")
+                    c4.metric("Profit Factor", f"{res['profit_factor']:.2f}")
                     
-                    st.subheader("📈 Equity Curve")
+                    c5, c6, c7, c8 = st.columns(4)
+                    c5.metric("Expectancy", f"{res['expectancy']:.2f}%")
+                    c6.metric("Max Drawdown", f"{res['max_dd']:.2f}%")
+                    c7.metric("Sharpe Ratio", f"{res['sharpe']:.2f}")
+                    c8.metric("Avg Holding", f"{res['avg_holding']:.1f} Days")
+                    
+                    st.subheader("📈 Equity Curve (Walk-Forward Simulation)")
                     st.line_chart(res['equity_df'].set_index('date')['equity'])
                     
                 else:

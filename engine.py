@@ -803,6 +803,7 @@ def scan_universe():
 
 def run_historical_backtest():
     import pandas as pd
+    import numpy as np
     from datetime import datetime
     
     historical_data = {}
@@ -841,10 +842,14 @@ def run_historical_backtest():
             current_price = df.loc[current_date, 'close']
             daily_equity += current_price * pos['shares']
             
+            # EXIT LOGIC (Advanced)
+            ma5 = df.loc[current_date, 'ma5']
             if current_price <= pos['stop']:
                 symbols_to_sell.append((sym, "STOP LOSS", current_price))
             elif current_price >= pos['tp']:
                 symbols_to_sell.append((sym, "TAKE PROFIT", current_price))
+            elif current_price > ma5:
+                symbols_to_sell.append((sym, "DYNAMIC EXIT (MA5)", current_price))
 
         for sym, reason, price in symbols_to_sell:
             pos = positions[sym]
@@ -854,7 +859,8 @@ def run_historical_backtest():
             cash += net_receive
             daily_equity += pnl
             
-            trade_history.append({'date': current_date, 'symbol': sym, 'type': 'SELL', 'pnl': pnl})
+            holding_days = (current_date - pos['entry_date']).days
+            trade_history.append({'date': current_date, 'symbol': sym, 'type': 'SELL', 'pnl': pnl, 'holding_days': holding_days, 'reason': reason})
             del positions[sym]
 
         for sym in UNIVERSE:
@@ -880,21 +886,42 @@ def run_historical_backtest():
                         cash -= total_cost
                         sl = float(risk['stop_loss'])
                         tp = entry_price + ((entry_price - sl) * 2)
-                        positions[sym] = {'shares': shares, 'entry': entry_price, 'stop': sl, 'tp': tp, 'cost': total_cost}
-                        trade_history.append({'date': current_date, 'symbol': sym, 'type': 'BUY', 'pnl': 0})
+                        positions[sym] = {'shares': shares, 'entry': entry_price, 'stop': sl, 'tp': tp, 'cost': total_cost, 'entry_date': current_date}
+                        trade_history.append({'date': current_date, 'symbol': sym, 'type': 'BUY', 'pnl': 0, 'holding_days': 0, 'reason': 'ENTRY'})
                         
         equity_curve.append({'date': current_date, 'equity': daily_equity})
 
     trades_df = pd.DataFrame(trade_history)
     equity_df = pd.DataFrame(equity_curve)
     
+    if trades_df.empty:
+        return None
+        
     final_equity = equity_df.iloc[-1]['equity']
     total_return = ((final_equity - capital) / capital) * 100
     
-    win_trades = len(trades_df[(trades_df['type'] == 'SELL') & (trades_df['pnl'] > 0)]) if not trades_df.empty else 0
-    total_closed = len(trades_df[trades_df['type'] == 'SELL']) if not trades_df.empty else 0
+    sells = trades_df[trades_df['type'] == 'SELL']
+    total_closed = len(sells)
+    win_trades = len(sells[sells['pnl'] > 0])
     win_rate = (win_trades / total_closed * 100) if total_closed > 0 else 0
     net_profit = final_equity - capital
+    
+    # Advanced Metrics
+    gross_profit = sells[sells['pnl'] > 0]['pnl'].sum() if total_closed > 0 else 0
+    gross_loss = abs(sells[sells['pnl'] < 0]['pnl'].sum()) if total_closed > 0 else 0
+    profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else (99.99 if gross_profit > 0 else 0)
+    
+    avg_holding = sells['holding_days'].mean() if total_closed > 0 else 0
+    expectancy = (sells['pnl'].mean() / capital * 100) if total_closed > 0 else 0
+    
+    # Max Drawdown
+    equity_df['peak'] = equity_df['equity'].cummax()
+    equity_df['drawdown'] = (equity_df['equity'] - equity_df['peak']) / equity_df['peak'] * 100
+    max_dd = equity_df['drawdown'].min()
+    
+    # Sharpe Ratio (Rough approximation: daily returns)
+    eq_returns = equity_df['equity'].pct_change().dropna()
+    sharpe = (eq_returns.mean() / eq_returns.std() * np.sqrt(252)) if eq_returns.std() > 0 else 0
     
     return {
         'capital': capital,
@@ -903,6 +930,11 @@ def run_historical_backtest():
         'total_return': total_return,
         'total_trades': total_closed,
         'win_rate': win_rate,
+        'profit_factor': profit_factor,
+        'expectancy': expectancy,
+        'max_dd': max_dd,
+        'sharpe': sharpe,
+        'avg_holding': avg_holding,
         'equity_df': equity_df,
         'trades_df': trades_df
     }
