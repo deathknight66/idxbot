@@ -166,6 +166,13 @@ def calculate_indicators(df):
         * np.sqrt(252)
     )
 
+    # RSI 2 (Larry Connors)
+    delta2 = df["close"].diff()
+    gain2 = (delta2.where(delta2 > 0, 0)).rolling(window=2).mean()
+    loss2 = (-delta2.where(delta2 < 0, 0)).rolling(window=2).mean()
+    rs2 = gain2 / loss2
+    df["rsi_2"] = 100 - (100 / (1 + rs2))
+    
     # ATR
     high_low = df["high"] - df["low"]
     high_close = abs(df["high"] - df["close"].shift())
