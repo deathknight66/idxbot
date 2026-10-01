@@ -674,3 +674,111 @@ def scan_universe():
     return pd.DataFrame(results), errors
 
 
+
+
+
+def run_historical_backtest():
+    import pandas as pd
+    from datetime import datetime
+    
+    historical_data = {}
+    for sym in UNIVERSE:
+        try:
+            df = get_market_data(sym, period='3y')
+            df = calculate_indicators(df)
+            historical_data[sym] = df
+        except Exception as e:
+            pass
+            
+    if not historical_data:
+        return None
+
+    all_dates = pd.to_datetime([])
+    for df in historical_data.values():
+        all_dates = all_dates.union(df.index)
+    all_dates = all_dates.sort_values()
+
+    capital = INITIAL_CAPITAL
+    cash = capital
+    positions = {}
+    trade_history = []
+    equity_curve = []
+
+    for current_date in all_dates:
+        daily_equity = cash
+        
+        symbols_to_sell = []
+        for sym, pos in list(positions.items()):
+            df = historical_data.get(sym)
+            if df is None or current_date not in df.index:
+                daily_equity += pos['cost']
+                continue
+                
+            current_price = df.loc[current_date, 'close']
+            daily_equity += current_price * pos['shares']
+            
+            if current_price <= pos['stop']:
+                symbols_to_sell.append((sym, "STOP LOSS", current_price))
+            elif current_price >= pos['tp']:
+                symbols_to_sell.append((sym, "TAKE PROFIT", current_price))
+
+        for sym, reason, price in symbols_to_sell:
+            pos = positions[sym]
+            gross_value = price * pos['shares']
+            net_receive = gross_value - (gross_value * 0.0025)
+            pnl = net_receive - pos['cost']
+            cash += net_receive
+            daily_equity += pnl
+            
+            trade_history.append({'date': current_date, 'symbol': sym, 'type': 'SELL', 'pnl': pnl})
+            del positions[sym]
+
+        for sym in UNIVERSE:
+            if sym in positions:
+                continue
+            df = historical_data.get(sym)
+            if df is None or current_date not in df.index:
+                continue
+                
+            df_up_to_today = df.loc[:current_date]
+            if len(df_up_to_today) < 20:
+                continue
+                
+            penetration = penetration_engine(df_up_to_today)
+            if penetration['signal'] == 'ENTRY CANDIDATE':
+                risk = risk_check(df_up_to_today, capital=capital)
+                if risk['approved']:
+                    shares = int(risk['lots'] * 100)
+                    entry_price = float(risk['entry'])
+                    total_cost = (shares * entry_price) * 1.0015
+                    
+                    if cash >= total_cost:
+                        cash -= total_cost
+                        sl = float(risk['stop_loss'])
+                        tp = entry_price + ((entry_price - sl) * 2)
+                        positions[sym] = {'shares': shares, 'entry': entry_price, 'stop': sl, 'tp': tp, 'cost': total_cost}
+                        trade_history.append({'date': current_date, 'symbol': sym, 'type': 'BUY', 'pnl': 0})
+                        
+        equity_curve.append({'date': current_date, 'equity': daily_equity})
+
+    trades_df = pd.DataFrame(trade_history)
+    equity_df = pd.DataFrame(equity_curve)
+    
+    final_equity = equity_df.iloc[-1]['equity']
+    total_return = ((final_equity - capital) / capital) * 100
+    
+    win_trades = len(trades_df[(trades_df['type'] == 'SELL') & (trades_df['pnl'] > 0)]) if not trades_df.empty else 0
+    total_closed = len(trades_df[trades_df['type'] == 'SELL']) if not trades_df.empty else 0
+    win_rate = (win_trades / total_closed * 100) if total_closed > 0 else 0
+    net_profit = final_equity - capital
+    
+    return {
+        'capital': capital,
+        'final_equity': final_equity,
+        'net_profit': net_profit,
+        'total_return': total_return,
+        'total_trades': total_closed,
+        'win_rate': win_rate,
+        'equity_df': equity_df,
+        'trades_df': trades_df
+    }

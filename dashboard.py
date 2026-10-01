@@ -601,3 +601,38 @@ st.divider()
 st.caption(
     f"Last update: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
 )
+
+
+# ============================================================
+# PAGE 4
+# STRATEGY TESTER (BACKTEST)
+# ============================================================
+st.write("---")
+st.header("4. Strategy Tester (Historical Backtest)")
+
+with st.expander("🧪 Buka Panel Strategy Tester (Klik di Sini)"):
+    st.write("Uji performa bot ke masa lalu (3 Tahun) untuk seluruh 45 saham tanpa harus menyentuh terminal/kode.")
+    
+    if st.button("▶️ JALANKAN BACKTEST (Semua Saham)"):
+        with st.spinner("⏳ Mesin waktu sedang berputar... Mengunduh & memproses puluhan ribu candle 3 tahun terakhir (Butuh waktu ~30 detik)..."):
+            try:
+                from engine import run_historical_backtest
+                res = run_historical_backtest()
+                
+                if res:
+                    st.success("✅ Backtest Selesai!")
+                    
+                    st.subheader("📊 Performance Summary")
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("Win Rate", f"{res['win_rate']:.1f}%")
+                    c2.metric("Total Trades", f"{res['total_trades']}")
+                    c3.metric("Net Profit", f"Rp {res['net_profit']:,.0f}")
+                    c4.metric("Total Return", f"{res['total_return']:.2f}%")
+                    
+                    st.subheader("📈 Equity Curve")
+                    st.line_chart(res['equity_df'].set_index('date')['equity'])
+                    
+                else:
+                    st.error("Gagal mendapatkan data.")
+            except Exception as e:
+                st.error(f"Error saat backtest: {e}")
