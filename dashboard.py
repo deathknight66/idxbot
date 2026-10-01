@@ -99,17 +99,41 @@ def show_login():
         st.markdown("*Paper Trading Mode*")
         os.makedirs("data", exist_ok=True)
         with sqlite3.connect("data/paper.db") as c:
-            c.execute("CREATE TABLE IF NOT EXISTS users(username TEXT PRIMARY KEY, pw TEXT)")
-            c.execute("INSERT OR IGNORE INTO users VALUES(?,?)", ("deathknight666", _hash("Xnunxer123*")))
-            c.commit()
+            # Support both old schema (password_hash, created_at) and new schema (pw)
+            # Use explicit column names to avoid column count mismatch
+            try:
+                cols = [r[1] for r in c.execute("PRAGMA table_info(users)").fetchall()]
+                if not cols:
+                    c.execute("CREATE TABLE IF NOT EXISTS users(username TEXT PRIMARY KEY, pw TEXT)")
+                    c.execute("INSERT OR IGNORE INTO users(username, pw) VALUES(?,?)",
+                              ("deathknight666", _hash("Xnunxer123*")))
+                elif "pw" in cols:
+                    c.execute("INSERT OR IGNORE INTO users(username, pw) VALUES(?,?)",
+                              ("deathknight666", _hash("Xnunxer123*")))
+                elif "password_hash" in cols:
+                    c.execute("INSERT OR IGNORE INTO users(username, password_hash) VALUES(?,?)",
+                              ("deathknight666", _hash("Xnunxer123*")))
+                c.commit()
+            except Exception:
+                pass
+
         with st.form("login"):
             u = st.text_input("Username")
             p = st.text_input("Password", type="password")
             if st.form_submit_button("Masuk →", use_container_width=True):
+                pw_hash = _hash(p)
+                matched = False
                 with sqlite3.connect("data/paper.db") as c:
-                    row = c.execute("SELECT pw FROM users WHERE username=?", (u,)).fetchone()
-                if row and row[0] == _hash(p):
-                    st.session_state.update({"logged_in":True, "username":u})
+                    cols = [r[1] for r in c.execute("PRAGMA table_info(users)").fetchall()]
+                    pw_col = "pw" if "pw" in cols else "password_hash"
+                    try:
+                        row = c.execute(f"SELECT {pw_col} FROM users WHERE username=?", (u,)).fetchone()
+                        if row and row[0] == pw_hash:
+                            matched = True
+                    except Exception:
+                        pass
+                if matched:
+                    st.session_state.update({"logged_in": True, "username": u})
                     st.rerun()
                 else:
                     st.error("Username/password salah")
