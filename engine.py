@@ -168,10 +168,13 @@ def calculate_indicators(df):
 
     # RSI 2 (Larry Connors)
     delta2 = df["close"].diff()
-    gain2 = (delta2.where(delta2 > 0, 0)).rolling(window=2).mean()
-    loss2 = (-delta2.where(delta2 < 0, 0)).rolling(window=2).mean()
-    rs2 = gain2 / loss2
+    # RSI 2 (Larry Connors) - Wilder's Smoothing for Max Power
+    delta2 = df["close"].diff()
+    gain2 = delta2.where(delta2 > 0, 0).ewm(alpha=1/2, adjust=False).mean()
+    loss2 = (-delta2.where(delta2 < 0, 0)).ewm(alpha=1/2, adjust=False).mean()
+    rs2 = gain2 / loss2.replace(0, float('nan'))
     df["rsi_2"] = 100 - (100 / (1 + rs2))
+    df["rsi_2"] = df["rsi_2"].fillna(100) # Jika loss 0, RSI = 100
     
     # ATR
     high_low = df["high"] - df["low"]
