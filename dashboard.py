@@ -105,6 +105,10 @@ st.set_page_config(
 
 st.title("📈 Trading Bot Command Center")
 
+if "alert_msg" in st.session_state and st.session_state["alert_msg"]:
+    st.success(st.session_state["alert_msg"])
+    st.session_state["alert_msg"] = ""
+
 # ------------------------------------------------------------
 # GLOBAL PORTFOLIO SUMMARY (Ditaruh di Paling Atas!)
 # ------------------------------------------------------------
@@ -462,7 +466,8 @@ if not scan_df.empty:
                                     (symbol, shares, entry_price, float(risk['stop_loss']), now, total_cost)
                                 )
                                 conn.execute("UPDATE kv SET v = v - ? WHERE k='cash'", (total_cost,))
-                                st.success(f"Order BUY {symbol} berhasil dieksekusi secara simulasi dan masuk ke paper.db!")
+                                st.session_state["alert_msg"] = f"✅ Order BUY {symbol} berhasil dieksekusi secara simulasi dan masuk ke paper.db!"
+                                st.rerun()
                 except Exception as ex:
                     st.error(f"Gagal mengeksekusi order: {ex}")
 
@@ -526,7 +531,7 @@ try:
                     # Update Cash
                     conn.execute("UPDATE kv SET v = v + ? WHERE k='cash'", (net_receive,))
                 
-                st.success(f"Berhasil menjual {sell_symbol} di Rp{current_price:,.0f}. Net PnL (setelah fee): Rp{pnl:,.0f}")
+                st.session_state["alert_msg"] = f"✅ Berhasil menjual {sell_symbol} di Rp{current_price:,.0f}. Net PnL (setelah fee): Rp{pnl:,.0f}"
                 st.rerun()
             except Exception as ex:
                 st.error(f"Gagal menjual {sell_symbol}: {ex}")
