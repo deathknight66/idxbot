@@ -602,8 +602,17 @@ with center:
             sig  = {}
         risk = risk_check(df, capital=equity)
 
+        latest    = df.iloc[-1]
+        entry_px  = float(latest['close'])
+        sl_px     = float(risk.get('stop_loss', entry_px * 0.95))
+        tp_px     = float(risk.get('take_profit', entry_px * 1.05))
+        rsi2_val  = float(df['rsi_2'].iloc[-1]) if 'rsi_2' in df.columns else (float(df['rsi'].iloc[-1]) if 'rsi' in df.columns else 50.0)
+        ma200_val = float(df['ma200'].iloc[-1]) if 'ma200' in df.columns else 0
+        vol_ratio = float(df['volume_ratio'].iloc[-1]) if 'volume_ratio' in df.columns else 1.0
+
         # ── Ticker Banner & Indicator Controls ──
         c_tick, c_ind = st.columns([5, 1])
+
         with c_tick:
             st.markdown(f"""
 <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 14px; background:#151924; border:1px solid #2B3346; border-radius:6px; margin-bottom:6px;">
