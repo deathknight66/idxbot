@@ -11,8 +11,10 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from engine import (
     get_market_data, calculate_indicators, signal_engine,
-    risk_check, make_decision, INITIAL_CAPITAL, UNIVERSE
+    risk_check, make_decision, detect_regime, run_historical_backtest,
+    INITIAL_CAPITAL, UNIVERSE
 )
+
 
 try:
     import anthropic
@@ -94,7 +96,7 @@ div.pos-card {
 /* ── Sleek TradingView Watchlist Styling in Left Column ── */
 [data-testid="column"]:first-child div[data-testid="stButton"],
 div[data-testid="stColumn"]:first-child div[data-testid="stButton"] {
-    margin-bottom: 2px !important;
+    margin-bottom: 3px !important;
 }
 [data-testid="column"]:first-child div[data-testid="stButton"] > button,
 div[data-testid="stColumn"]:first-child div[data-testid="stButton"] > button {
@@ -102,9 +104,9 @@ div[data-testid="stColumn"]:first-child div[data-testid="stButton"] > button {
     border: 1px solid #1E2433 !important;
     border-left: 3px solid transparent !important;
     border-radius: 4px !important;
-    padding: 6px 12px !important;
-    height: 36px !important;
-    min-height: 36px !important;
+    padding: 5px 10px !important;
+    height: 44px !important;
+    min-height: 44px !important;
     width: 100% !important;
     box-shadow: none !important;
     transition: all 0.15s ease !important;
@@ -124,14 +126,15 @@ div[data-testid="stColumn"]:first-child div[data-testid="stButton"] > button[kin
 [data-testid="column"]:first-child div[data-testid="stButton"] > button p,
 div[data-testid="stColumn"]:first-child div[data-testid="stButton"] > button p {
     font-family: 'JetBrains Mono', 'Roboto Mono', monospace, sans-serif !important;
-    font-size: 11.5px !important;
+    font-size: 11px !important;
     font-weight: 600 !important;
     color: #D1D4DC !important;
     width: 100% !important;
-    display: flex !important;
-    justify-content: space-between !important;
-    align-items: center !important;
+    display: block !important;
+    white-space: pre !important;
+    line-height: 1.35 !important;
     margin: 0 !important;
+    text-align: left !important;
 }
 [data-testid="column"]:first-child div[data-testid="stButton"] > button[kind="primary"] p,
 div[data-testid="stColumn"]:first-child div[data-testid="stButton"] > button[kind="primary"] p {
@@ -312,6 +315,39 @@ def load_price(symbol):
 # ─────────────────────────────────────────
 # SESSION STATE
 # ─────────────────────────────────────────
+# ─────────────────────────────────────────
+# SCANNER CACHE
+# ─────────────────────────────────────────
+@st.cache_data(ttl=90)
+def scan_all_watchlist():
+    counts = {"BUY": 0, "SETUP": 0, "WATCH": 0, "AVOID": 0}
+    symbol_states = {}
+    for s in WATCHLIST:
+        try:
+            df_item = load_chart(s + ".JK", "3mo")
+            dec_item = make_decision(df_item, capital=100_000_000)
+            st_val = dec_item.get("state", "AVOID")
+            if st_val == "BUY":
+                counts["BUY"] += 1
+                symbol_states[s] = "BUY ●"
+            elif st_val == "SETUP":
+                counts["SETUP"] += 1
+                symbol_states[s] = "SETUP ●"
+            elif st_val in ("WAIT", "WATCH"):
+                counts["WATCH"] += 1
+                symbol_states[s] = "WATCH ●"
+            else:
+                counts["AVOID"] += 1
+                symbol_states[s] = "AVOID ●"
+        except Exception:
+            counts["AVOID"] += 1
+            symbol_states[s] = "— ●"
+    return counts, symbol_states
+
+
+# ─────────────────────────────────────────
+# SESSION STATE
+# ─────────────────────────────────────────
 WATCHLIST = [s.replace(".JK","") for s in UNIVERSE[:15]]
 if "sym" not in st.session_state:
     st.session_state["sym"] = "BBCA"
@@ -321,15 +357,14 @@ if "chat" not in st.session_state:
     st.session_state["chat"] = []
 if "confirm_buy" not in st.session_state:
     st.session_state["confirm_buy"] = False
+if "backtest_res" not in st.session_state:
+    st.session_state["backtest_res"] = None
 
 selected = st.session_state["sym"]
 symbol   = selected + ".JK"
 
 # ─────────────────────────────────────────
-# TOP BAR
-# ─────────────────────────────────────────
-# ─────────────────────────────────────────
-# TOP BAR
+# TOP BAR DATA & METRICS
 # ─────────────────────────────────────────
 positions = get_positions()
 cash      = get_cash()
@@ -338,7 +373,7 @@ equity    = cash + invested
 
 total_pnl = equity - INITIAL_CAPITAL
 total_pnl_pct = (total_pnl / INITIAL_CAPITAL) * 100
-total_pnl_color = "#26a69a" if total_pnl >= 0 else "#ef5350"
+total_pnl_color = "#00E676" if total_pnl >= 0 else "#FF5252"
 total_pnl_str = f"+Rp{total_pnl:,.0f}" if total_pnl >= 0 else f"-Rp{abs(total_pnl):,.0f}"
 
 # Load chart data early (used in top bar price & ticker)
@@ -347,12 +382,40 @@ try:
     last_price = float(df['close'].iloc[-1])
     prev_price = float(df['close'].iloc[-2])
     chg_pct    = (last_price - prev_price) / prev_price * 100
-    chg_color  = "#26a69a" if chg_pct >= 0 else "#ef5350"
+    chg_color  = "#00E676" if chg_pct >= 0 else "#FF5252"
     chg_sign   = "▲" if chg_pct >= 0 else "▼"
     data_ok    = True
 except Exception as e:
     df, last_price, chg_pct, chg_color, chg_sign = None, 0, 0, "#787b86", "─"
     data_ok = False
+
+# Today's estimated unrealized P&L from positions
+today_pnl = 0.0
+if not positions.empty:
+    for _, prow in positions.iterrows():
+        try:
+            p_sym = str(prow['symbol'])
+            p_sh = int(prow.get('shares', 0))
+            px_now, pct_now = load_price(p_sym + ".JK")
+            px_prev = px_now / (1 + pct_now / 100) if (1 + pct_now / 100) != 0 else px_now
+            today_pnl += (px_now - px_prev) * p_sh * 0.9975
+        except:
+            pass
+today_pnl_str = f"+Rp{today_pnl:,.0f}" if today_pnl >= 0 else f"-Rp{abs(today_pnl):,.0f}"
+today_pnl_color = "#00E676" if today_pnl >= 0 else "#FF5252"
+
+# Global market regime
+global_regime = detect_regime(df) if data_ok else "SIDEWAYS"
+regime_badge = (
+    "🟢 BULL" if global_regime == "BULL"
+    else "🔴 BEAR" if global_regime == "BEAR"
+    else "🟡 SIDEWAYS"
+)
+regime_color = (
+    "#00E676" if global_regime == "BULL"
+    else "#FF5252" if global_regime == "BEAR"
+    else "#FFD700"
+)
 
 # Position info for current symbol
 pnl_pos = 0.0
@@ -376,11 +439,11 @@ if not positions.empty and data_ok:
     except:
         pass
 
-pos_pnl_color = "#26a69a" if pnl_pos >= 0 else "#ef5350"
+pos_pnl_color = "#00E676" if pnl_pos >= 0 else "#FF5252"
 pos_pnl_str   = f"+Rp{pnl_pos:,.0f}" if pnl_pos >= 0 else f"-Rp{abs(pnl_pos):,.0f}"
 
-# ── TOP BAR: Logo Left | Big Centered Cards | Actions Right ──
-col_brand, col_metrics, col_actions = st.columns([1.3, 5.7, 1.2])
+# ── TOP BAR: Logo Left | 6 Centered Cards | Actions Right ──
+col_brand, col_metrics, col_actions = st.columns([1.3, 5.8, 1.2])
 
 with col_brand:
     st.markdown("""
@@ -389,33 +452,41 @@ with col_brand:
     <span style="font-size:22px; font-weight:800; color:#FFFFFF; letter-spacing:-0.5px;">📈 IDXBot</span>
     <span style="font-size:10px; font-weight:700; color:#00E676; background:rgba(0,230,118,0.12); border:1px solid #00E676; padding:2px 6px; border-radius:4px;">● PAPER</span>
   </div>
-  <div style="font-size:11px; color:#8F96A8; margin-top:2px;">Trading Terminal</div>
+  <div style="font-size:11px; color:#8F96A8; margin-top:2px;">Algorithmic Trading Terminal</div>
 </div>""", unsafe_allow_html=True)
 
 with col_metrics:
     st.markdown(f"""
-<div style="display:flex; justify-content:center; align-items:stretch; gap:12px; padding:2px 0;">
-  <div style="background:#151924; border:1px solid #2B3346; border-radius:8px; padding:8px 18px; text-align:center; min-width:105px; box-shadow:0 2px 8px rgba(0,0,0,0.25);">
-    <div style="font-size:10px; font-weight:800; color:#8F96A8; letter-spacing:0.8px; text-transform:uppercase;">TOTAL EQUITY</div>
-    <div style="font-size:19px; font-weight:900; color:#FFFFFF; margin-top:2px;">Rp{equity/1e6:.1f}M</div>
+<div style="display:flex; justify-content:center; align-items:stretch; gap:10px; padding:2px 0;">
+  <div style="background:#151924; border:1px solid #2B3346; border-radius:8px; padding:6px 14px; text-align:center; min-width:95px; box-shadow:0 2px 8px rgba(0,0,0,0.25);">
+    <div style="font-size:9px; font-weight:800; color:#8F96A8; letter-spacing:0.8px;">TOTAL EQUITY</div>
+    <div style="font-size:18px; font-weight:900; color:#FFFFFF; margin-top:2px;">Rp{equity/1e6:.1f}M</div>
+    <div style="font-size:9px; color:{total_pnl_color};">{total_pnl_pct:+.2f}% total</div>
   </div>
-  <div style="background:#151924; border:1px solid #2B3346; border-radius:8px; padding:8px 18px; text-align:center; min-width:105px; box-shadow:0 2px 8px rgba(0,0,0,0.25);">
-    <div style="font-size:10px; font-weight:800; color:#8F96A8; letter-spacing:0.8px; text-transform:uppercase;">CASH AVAILABLE</div>
-    <div style="font-size:19px; font-weight:900; color:#E1E4EA; margin-top:2px;">Rp{cash/1e6:.1f}M</div>
+  <div style="background:#151924; border:1px solid #2B3346; border-radius:8px; padding:6px 14px; text-align:center; min-width:105px; box-shadow:0 2px 8px rgba(0,0,0,0.25);">
+    <div style="font-size:9px; font-weight:800; color:#8F96A8; letter-spacing:0.8px;">TODAY'S P&L</div>
+    <div style="font-size:18px; font-weight:900; color:{today_pnl_color}; margin-top:2px;">{today_pnl_str}</div>
+    <div style="font-size:9px; color:{today_pnl_color};">{(today_pnl/equity*100) if equity>0 else 0:+.2f}% today</div>
   </div>
-  <div style="background:#151924; border:1px solid #2B3346; border-radius:8px; padding:8px 18px; text-align:center; min-width:105px; box-shadow:0 2px 8px rgba(0,0,0,0.25);">
-    <div style="font-size:10px; font-weight:800; color:#8F96A8; letter-spacing:0.8px; text-transform:uppercase;">INVESTED</div>
-    <div style="font-size:19px; font-weight:900; color:#E1E4EA; margin-top:2px;">Rp{invested/1e6:.1f}M</div>
+  <div style="background:#151924; border:1px solid #2B3346; border-radius:8px; padding:6px 14px; text-align:center; min-width:95px; box-shadow:0 2px 8px rgba(0,0,0,0.25);">
+    <div style="font-size:9px; font-weight:800; color:#8F96A8; letter-spacing:0.8px;">AVAILABLE CASH</div>
+    <div style="font-size:18px; font-weight:900; color:#E1E4EA; margin-top:2px;">Rp{cash/1e6:.1f}M</div>
+    <div style="font-size:9px; color:#8F96A8;">{cash/equity*100:.1f}% cash</div>
   </div>
-  <div style="background:#151924; border:1px solid #2B3346; border-radius:8px; padding:8px 16px; text-align:center; min-width:75px; box-shadow:0 2px 8px rgba(0,0,0,0.25);">
-    <div style="font-size:10px; font-weight:800; color:#8F96A8; letter-spacing:0.8px; text-transform:uppercase;">POSITIONS</div>
-    <div style="font-size:19px; font-weight:900; color:#2962FF; margin-top:2px;">{len(positions)} / 5</div>
+  <div style="background:#151924; border:1px solid #2B3346; border-radius:8px; padding:6px 14px; text-align:center; min-width:95px; box-shadow:0 2px 8px rgba(0,0,0,0.25);">
+    <div style="font-size:9px; font-weight:800; color:#8F96A8; letter-spacing:0.8px;">INVESTED</div>
+    <div style="font-size:18px; font-weight:900; color:#E1E4EA; margin-top:2px;">Rp{invested/1e6:.1f}M</div>
+    <div style="font-size:9px; color:#8F96A8;">{invested/equity*100:.1f}% exposure</div>
   </div>
-  <div style="background:#151924; border:1px solid {'#00E676' if total_pnl>=0 else '#FF5252'}; border-radius:8px; padding:8px 18px; text-align:center; min-width:145px; box-shadow:0 2px 8px rgba(0,0,0,0.25);">
-    <div style="font-size:10px; font-weight:800; color:#8F96A8; letter-spacing:0.8px; text-transform:uppercase;">TOTAL UNTUNG / RUGI</div>
-    <div style="font-size:19px; font-weight:900; color:{'#00E676' if total_pnl>=0 else '#FF5252'}; margin-top:2px;">
-      {total_pnl_str} <span style="font-size:12px; font-weight:700;">({total_pnl_pct:+.2f}%)</span>
-    </div>
+  <div style="background:#151924; border:1px solid #2B3346; border-radius:8px; padding:6px 12px; text-align:center; min-width:70px; box-shadow:0 2px 8px rgba(0,0,0,0.25);">
+    <div style="font-size:9px; font-weight:800; color:#8F96A8; letter-spacing:0.8px;">POSITIONS</div>
+    <div style="font-size:18px; font-weight:900; color:#2962FF; margin-top:2px;">{len(positions)} / 5</div>
+    <div style="font-size:9px; color:#8F96A8;">{len(positions)*20}% cap</div>
+  </div>
+  <div style="background:#151924; border:1px solid #2B3346; border-radius:8px; padding:6px 14px; text-align:center; min-width:95px; box-shadow:0 2px 8px rgba(0,0,0,0.25);">
+    <div style="font-size:9px; font-weight:800; color:#8F96A8; letter-spacing:0.8px;">MARKET REGIME</div>
+    <div style="font-size:16px; font-weight:900; color:{regime_color}; margin-top:3px;">{regime_badge}</div>
+    <div style="font-size:9px; color:#8F96A8;">Global Trend</div>
   </div>
 </div>""", unsafe_allow_html=True)
 
@@ -433,7 +504,6 @@ with col_actions:
             st.session_state["logged_in"] = False
             st.rerun()
 
-
 # Flash messages
 if "flash" in st.session_state:
     msg = st.session_state.pop("flash")
@@ -444,14 +514,14 @@ st.markdown("<hr style='margin:6px 0; border-color:#2A2E39'>", unsafe_allow_html
 # ─────────────────────────────────────────
 # MAIN LAYOUT: LEFT | CENTER | RIGHT
 # ─────────────────────────────────────────
-left, center, right = st.columns([1.1, 3.9, 1.4], gap="small")
+left, center, right = st.columns([1.15, 3.85, 1.4], gap="small")
 
 # ══════════════════════════
-# LEFT — Watchlist
+# LEFT — Watchlist + Bot Scan
 # ══════════════════════════
 with left:
     st.markdown(
-        "<div style='padding:10px 8px 8px; font-size:12px; color:#8F96A8; font-weight:800; "
+        "<div style='padding:8px 8px 6px; font-size:11px; color:#8F96A8; font-weight:800; "
         "letter-spacing:1px; border-bottom:1px solid #2B3346; display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;'>"
         "<span>📊 WATCHLIST</span>"
         f"<span style='color:#2962FF; font-size:10px; font-weight:700;'>{len(WATCHLIST)} PAIRS</span>"
@@ -459,44 +529,61 @@ with left:
         unsafe_allow_html=True
     )
 
+    # Scanner summary cache
+    scan_counts, scan_sym_states = scan_all_watchlist()
 
-    for sym in WATCHLIST:
-        px, pct = load_price(sym + ".JK")
-        is_active = (sym == selected)
-        btn_label = f"{'▶ ' if is_active else '   '}{sym:<5}  {px:>7,.0f}  {pct:>+6.2f}%"
-        if st.button(
-            btn_label,
-            key=f"wl_btn_{sym}",
-            type="primary" if is_active else "secondary",
-            use_container_width=True,
-            help=f"Klik untuk buka {sym}"
-        ):
-            st.session_state["sym"] = sym
-            st.rerun()
+    # 1. SCROLLABLE WATCHLIST CONTAINER (Never pushes Bot Scan off screen)
+    with st.container(height=450):
+        for sym in WATCHLIST:
+            px, pct = load_price(sym + ".JK")
+            is_active = (sym == selected)
 
-    # ── BOT SCANNER card ──
-    buy_count = wait_count = 0
-    for sym in WATCHLIST:
-        try:
-            df_scan = load_chart(sym + ".JK", "3mo")
-            d = make_decision(df_scan, capital=equity)
-            if d.get('approved'): buy_count += 1
-            else: wait_count += 1
-        except:
-            wait_count += 1
+            # Check if holding
+            if not positions.empty and sym in positions['symbol'].values:
+                p_row = positions[positions['symbol'] == sym].iloc[0]
+                p_sh = int(p_row.get('shares', 0))
+                p_lt = p_sh // 100
+                p_c  = float(p_row.get('cost', 0))
+                p_diff = (px * p_sh * 0.9975) - p_c
+                p_diff_str = f"+{p_diff/1e3:.0f}K" if p_diff >= 0 else f"-{abs(p_diff)/1e3:.0f}K"
+                pos_sub = f"{p_lt} lot {p_diff_str}"
+                state_sub = "HOLD ●"
+            else:
+                pos_sub = "—"
+                state_sub = scan_sym_states.get(sym, "WATCH ●")
 
+            btn_label = f"{'▶ ' if is_active else '   '}{sym:<5}  {px:>7,.0f} {pct:>+6.2f}%\n  {pos_sub:<16}  {state_sub:>11}"
+            if st.button(
+                btn_label,
+                key=f"wl_btn_{sym}",
+                type="primary" if is_active else "secondary",
+                use_container_width=True,
+                help=f"Buka chart {sym}"
+            ):
+                st.session_state["sym"] = sym
+                st.rerun()
+
+    # 2. FIXED / DOCKED BOT SCANNER (Always visible directly below watchlist)
     st.markdown(f"""
-<div style="background:#181c27; border:1px solid #2A2E39; border-radius:6px; padding:10px; margin-top:10px;">
-  <div style="font-size:10px; font-weight:800; color:#787b86; letter-spacing:1px; margin-bottom:6px;">
+<div style="background:#151924; border:1px solid #2B3346; border-radius:8px; padding:10px 12px; margin-top:8px;">
+  <div style="font-size:10px; font-weight:800; color:#8F96A8; letter-spacing:1px; margin-bottom:8px;">
     🤖 BOT SCANNER
   </div>
-  <div style="display:flex; justify-content:space-between; align-items:center; background:#131722; padding:5px 8px; border-radius:4px; margin-bottom:4px; border:1px solid #222634;">
-    <span style="font-size:11px; color:#D1D4DC;">🟢 BUY Ready</span>
-    <b style="font-size:13px; color:#26a69a;">{buy_count}</b>
+  <div style="display:flex; justify-content:space-between; align-items:center; padding:4px 0; border-bottom:1px solid #1E2433;">
+    <span style="font-size:11px; color:#D1D4DC;">🟢 BUY READY</span>
+    <b style="font-size:13px; color:#00E676;">{scan_counts['BUY']}</b>
   </div>
-  <div style="display:flex; justify-content:space-between; align-items:center; background:#131722; padding:5px 8px; border-radius:4px; border:1px solid #222634;">
-    <span style="font-size:11px; color:#D1D4DC;">🟡 Watching</span>
-    <b style="font-size:13px; color:#FF6D00;">{wait_count}</b>
+  <div style="display:flex; justify-content:space-between; align-items:center; padding:4px 0; border-bottom:1px solid #1E2433;">
+    <span style="font-size:11px; color:#D1D4DC;">🟡 SETUP</span>
+    <b style="font-size:13px; color:#FFD700;">{scan_counts['SETUP']}</b>
+  </div>
+  <div style="display:flex; justify-content:space-between; align-items:center; padding:4px 0; border-bottom:1px solid #1E2433;">
+    <span style="font-size:11px; color:#D1D4DC;">🔵 WATCHING</span>
+    <b style="font-size:13px; color:#2962FF;">{scan_counts['WATCH']}</b>
+  </div>
+  <div style="display:flex; justify-content:space-between; align-items:center; padding:4px 0;">
+    <span style="font-size:11px; color:#D1D4DC;">🔴 AVOID</span>
+    <b style="font-size:13px; color:#FF5252;">{scan_counts['AVOID']}</b>
   </div>
 </div>""", unsafe_allow_html=True)
 
@@ -515,100 +602,110 @@ with center:
             sig  = {}
         risk = risk_check(df, capital=equity)
 
-        latest    = df.iloc[-1]
-        entry_px  = float(latest['close'])
-        sl_px     = float(risk.get('stop_loss', entry_px * 0.95))
-        tp_px     = float(risk.get('take_profit', entry_px * 1.05))
-        rsi2_val  = float(df['rsi_2'].iloc[-1]) if 'rsi_2' in df.columns else float(df['rsi'].iloc[-1])
-        ma200_val = float(df['ma200'].iloc[-1]) if 'ma200' in df.columns else 0
-        vol_ratio = float(df['volume_ratio'].iloc[-1]) if 'volume_ratio' in df.columns else 1.0
-
-        # Ticker Banner — lowers chart and keeps it centered
-        st.markdown(f"""
-<div style="display:flex; justify-content:space-between; align-items:center; padding:8px 14px; background:#181c27; border:1px solid #2A2E39; border-radius:6px; margin-bottom:6px;">
+        # ── Ticker Banner & Indicator Controls ──
+        c_tick, c_ind = st.columns([5, 1])
+        with c_tick:
+            st.markdown(f"""
+<div style="display:flex; justify-content:space-between; align-items:center; padding:8px 14px; background:#151924; border:1px solid #2B3346; border-radius:6px; margin-bottom:6px;">
   <div style="display:flex; align-items:center; gap:10px;">
     <span style="font-size:18px; font-weight:800; color:#FFFFFF;">{selected}.JK</span>
     <span style="font-size:20px; font-weight:800; color:{chg_color};">Rp{last_price:,.0f}</span>
-    <span style="font-size:12px; font-weight:700; color:{chg_color}; background:{'rgba(38,166,154,0.15)' if chg_pct>=0 else 'rgba(239,83,80,0.15)'}; padding:2px 8px; border-radius:4px;">
+    <span style="font-size:12px; font-weight:700; color:{chg_color}; background:{'rgba(0,230,118,0.15)' if chg_pct>=0 else 'rgba(255,82,82,0.15)'}; padding:2px 8px; border-radius:4px;">
       {chg_sign} {abs(chg_pct):.2f}%
     </span>
   </div>
-  <div style="display:flex; align-items:center; gap:14px; font-size:11px; color:#787b86;">
+  <div style="display:flex; align-items:center; gap:14px; font-size:11px; color:#8F96A8;">
     <span>Open: <b style="color:#D1D4DC;">Rp{float(latest['open']):,.0f}</b></span>
     <span>High: <b style="color:#D1D4DC;">Rp{float(latest['high']):,.0f}</b></span>
     <span>Low: <b style="color:#D1D4DC;">Rp{float(latest['low']):,.0f}</b></span>
     <span>Vol: <b style="color:#D1D4DC;">{vol_ratio:.1f}x</b></span>
-    <span>RSI(2): <b style="color:{'#ef5350' if rsi2_val<10 else '#26a69a' if rsi2_val>80 else '#FF6D00'};">{rsi2_val:.1f}</b></span>
+    <span>RSI(2): <b style="color:{'#FF5252' if rsi2_val<10 else '#00E676' if rsi2_val>80 else '#FFD700'};">{rsi2_val:.1f}</b></span>
   </div>
 </div>""", unsafe_allow_html=True)
 
-        
-        # ── CHART ──
-        fig = make_subplots(
-            rows=3, cols=1, shared_xaxes=True,
-            vertical_spacing=0.01,
-            row_heights=[0.65, 0.15, 0.20],
-            subplot_titles=("", "", "RSI(2)")
-        )
-        
+        with c_ind:
+            with st.popover("⚙️ Indicators ▾", use_container_width=True):
+                show_ma20  = st.checkbox("MA20 (Blue)", value=True)
+                show_ma50  = st.checkbox("MA50 (Orange)", value=True)
+                show_ma200 = st.checkbox("MA200 (Purple dot)", value=True)
+                show_bb    = st.checkbox("Bollinger Bands", value=True)
+                show_rsi2  = st.checkbox("RSI(2) Subplot", value=True)
+
+        # ── CHART SUBPLOTS ──
+        if show_rsi2:
+            fig = make_subplots(
+                rows=3, cols=1, shared_xaxes=True,
+                vertical_spacing=0.01,
+                row_heights=[0.65, 0.15, 0.20],
+                subplot_titles=("", "", "RSI(2)")
+            )
+        else:
+            fig = make_subplots(
+                rows=2, cols=1, shared_xaxes=True,
+                vertical_spacing=0.01,
+                row_heights=[0.80, 0.20],
+                subplot_titles=("", "")
+            )
+
         # Candlestick
         fig.add_trace(go.Candlestick(
             x=df.index, open=df['open'], high=df['high'],
             low=df['low'],  close=df['close'],
             name="",
-            increasing_line_color='#26a69a', decreasing_line_color='#ef5350',
-            increasing_fillcolor='#26a69a',  decreasing_fillcolor='#ef5350',
+            increasing_line_color='#00E676', decreasing_line_color='#FF5252',
+            increasing_fillcolor='#00E676',  decreasing_fillcolor='#FF5252',
         ), row=1, col=1)
-        
-        # MAs
-        fig.add_trace(go.Scatter(x=df.index, y=df['ma20'],  name='MA20',
-                                 line=dict(color='#2962FF', width=1.5)), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df['ma50'],  name='MA50',
-                                 line=dict(color='#FF6D00', width=1.5)), row=1, col=1)
-        if 'ma200' in df.columns:
+
+        # MAs (collapsible via controls)
+        if show_ma20 and 'ma20' in df.columns:
+            fig.add_trace(go.Scatter(x=df.index, y=df['ma20'], name='MA20',
+                                     line=dict(color='#2962FF', width=1.5)), row=1, col=1)
+        if show_ma50 and 'ma50' in df.columns:
+            fig.add_trace(go.Scatter(x=df.index, y=df['ma50'], name='MA50',
+                                     line=dict(color='#FF6D00', width=1.5)), row=1, col=1)
+        if show_ma200 and 'ma200' in df.columns:
             fig.add_trace(go.Scatter(x=df.index, y=df['ma200'], name='MA200',
                                      line=dict(color='#9c27b0', width=1, dash='dot')), row=1, col=1)
-        
+
         # Bollinger Bands
-        if 'bb_upper' in df.columns:
+        if show_bb and 'bb_upper' in df.columns:
             fig.add_trace(go.Scatter(x=df.index, y=df['bb_upper'], name='BB',
                                      line=dict(color='rgba(120,120,120,0.4)', width=1)), row=1, col=1)
             fig.add_trace(go.Scatter(x=df.index, y=df['bb_lower'], name='',
                                      line=dict(color='rgba(120,120,120,0.4)', width=1),
                                      fill='tonexty', fillcolor='rgba(120,120,120,0.05)',
                                      showlegend=False), row=1, col=1)
-        
+
         # SL / TP horizontal lines (last 60 bars)
         recent_dates = df.index[-60:]
         if risk.get('approved'):
             fig.add_trace(go.Scatter(
                 x=[recent_dates[0], recent_dates[-1]], y=[tp_px, tp_px],
-                mode='lines', name='TP', line=dict(color='#26a69a', width=1.5, dash='dash')
+                mode='lines', name='TP', line=dict(color='#00E676', width=1.5, dash='dash')
             ), row=1, col=1)
             fig.add_trace(go.Scatter(
                 x=[recent_dates[0], recent_dates[-1]], y=[sl_px, sl_px],
-                mode='lines', name='SL', line=dict(color='#ef5350', width=1.5, dash='dash')
+                mode='lines', name='SL', line=dict(color='#FF5252', width=1.5, dash='dash')
             ), row=1, col=1)
-            # Entry annotation
             fig.add_annotation(
                 x=recent_dates[-1], y=entry_px,
                 text=f"🟢 BUY {entry_px:,.0f}", showarrow=False,
-                font=dict(color='#26a69a', size=11), bgcolor='#1a3a2a',
-                bordercolor='#26a69a', borderwidth=1, xanchor='right'
+                font=dict(color='#00E676', size=11), bgcolor='#10261a',
+                bordercolor='#00E676', borderwidth=1, xanchor='right'
             )
             fig.add_annotation(
                 x=recent_dates[-1], y=tp_px,
                 text=f"TP {tp_px:,.0f}", showarrow=False,
-                font=dict(color='#26a69a', size=10), bgcolor='#1a3a2a',
-                bordercolor='#26a69a', borderwidth=1, xanchor='right'
+                font=dict(color='#00E676', size=10), bgcolor='#10261a',
+                bordercolor='#00E676', borderwidth=1, xanchor='right'
             )
             fig.add_annotation(
                 x=recent_dates[-1], y=sl_px,
                 text=f"SL {sl_px:,.0f}", showarrow=False,
-                font=dict(color='#ef5350', size=10), bgcolor='#3a1a1a',
-                bordercolor='#ef5350', borderwidth=1, xanchor='right'
+                font=dict(color='#FF5252', size=10), bgcolor='#2d1212',
+                bordercolor='#FF5252', borderwidth=1, xanchor='right'
             )
-        
+
         # Active position marker
         if not positions.empty and symbol in positions['symbol'].values:
             pos_row = positions[positions['symbol'] == symbol].iloc[0]
@@ -617,78 +714,90 @@ with center:
                           line_width=1.5, row=1, col=1,
                           annotation_text=f"📍 Position {entry_val:,.0f}",
                           annotation_font_color='#FFD700')
-        
+
         # Volume
-        colors = ['#26a69a' if c >= o else '#ef5350'
+        colors = ['#00E676' if c >= o else '#FF5252'
                   for c, o in zip(df['close'], df['open'])]
         fig.add_trace(go.Bar(x=df.index, y=df['volume'],
                              marker_color=colors, opacity=0.6, name='Vol',
                              showlegend=False), row=2, col=1)
-        
-        # RSI(2)
-        rsi_col = 'rsi_2' if 'rsi_2' in df.columns else 'rsi'
-        fig.add_trace(go.Scatter(x=df.index, y=df[rsi_col], name='RSI(2)',
-                                 line=dict(color='#FF6D00', width=1.5),
-                                 showlegend=False), row=3, col=1)
-        fig.add_hline(y=5,  line_color='#26a69a', line_dash='dash', line_width=1, row=3, col=1)
-        fig.add_hline(y=80, line_color='#ef5350', line_dash='dash', line_width=1, row=3, col=1)
-        
+
+        # RSI(2) Subplot
+        if show_rsi2:
+            rsi_col = 'rsi_2' if 'rsi_2' in df.columns else 'rsi'
+            fig.add_trace(go.Scatter(x=df.index, y=df[rsi_col], name='RSI(2)',
+                                     line=dict(color='#FFD700', width=1.5),
+                                     showlegend=False), row=3, col=1)
+            fig.add_hline(y=5,  line_color='#00E676', line_dash='dash', line_width=1, row=3, col=1)
+            fig.add_hline(y=80, line_color='#FF5252', line_dash='dash', line_width=1, row=3, col=1)
+
         fig.update_layout(
             template='plotly_dark',
             paper_bgcolor='#131722', plot_bgcolor='#131722',
-            height=520,
+            height=510,
             xaxis_rangeslider_visible=False,
             legend=dict(orientation='h', y=1.01, x=0, font=dict(size=10)),
             margin=dict(l=0, r=0, t=5, b=0),
-            xaxis3=dict(gridcolor='#2A2E39'),
             yaxis=dict(gridcolor='#2A2E39', side='right'),
             yaxis2=dict(gridcolor='#2A2E39', side='right'),
-            yaxis3=dict(gridcolor='#2A2E39', side='right', range=[0, 100]),
         )
+        if show_rsi2:
+            fig.update_layout(
+                xaxis3=dict(gridcolor='#2A2E39'),
+                yaxis3=dict(gridcolor='#2A2E39', side='right', range=[0, 100])
+            )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
 # ══════════════════════════
-# RIGHT — Order / Bot Panel
+# RIGHT — Trade Panel & Bot Analysis
 # ══════════════════════════
 with right:
-    # Selected symbol summary card
+    # ── SECTION A: TRADE PANEL (MANUAL ORDER) ──
     st.markdown(f"""
-<div style='background:#181c27;border:1px solid #2A2E39;border-radius:6px;padding:10px 12px;margin-bottom:6px'>
-  <div style='display:flex;justify-content:space-between;align-items:center'>
-    <span style='font-size:16px;font-weight:800;color:#FFFFFF'>{selected}.JK</span>
-    <span style='font-size:11px;font-weight:700;color:{chg_color};background:{"rgba(38,166,154,0.15)" if chg_pct>=0 else "rgba(239,83,80,0.15)"};padding:2px 6px;border-radius:4px'>
+<div style='background:#151924;border:1px solid #2B3346;border-radius:8px;padding:10px 12px;margin-bottom:6px;'>
+  <div style='display:flex;justify-content:space-between;align-items:center;'>
+    <span style='font-size:16px;font-weight:800;color:#FFFFFF;'>{selected}.JK</span>
+    <span style='font-size:11px;font-weight:700;color:{chg_color};background:{"rgba(0,230,118,0.15)" if chg_pct>=0 else "rgba(255,82,82,0.15)"};padding:2px 6px;border-radius:4px;'>
       {chg_sign} {abs(chg_pct):.2f}%
     </span>
   </div>
-  <div style='font-size:22px;color:{chg_color};font-weight:800;margin-top:2px'>
+  <div style='font-size:22px;color:{chg_color};font-weight:800;margin-top:2px;'>
     Rp{last_price:,.0f}
   </div>
 </div>""", unsafe_allow_html=True)
 
-    # Position status card (Untung / Rugi)
+    # Position status card
     if has_pos:
         st.markdown(f"""
-<div style="background:rgba(38,166,154,0.08);border:1px solid #26a69a;border-radius:6px;padding:8px 12px;margin-bottom:8px">
-  <div style="display:flex;justify-content:space-between;align-items:center">
-    <span style="font-size:10px;font-weight:800;color:#26a69a;letter-spacing:0.5px">💼 POSISI ANDA</span>
-    <span style="font-size:11px;font-weight:700;color:#FFFFFF">{pos_lots} LOT ({pos_shares:,} LBR)</span>
+<div style="background:rgba(0,230,118,0.08);border:1px solid #00E676;border-radius:6px;padding:8px 12px;margin-bottom:8px;">
+  <div style="display:flex;justify-content:space-between;align-items:center;">
+    <span style="font-size:10px;font-weight:800;color:#00E676;letter-spacing:0.5px;">💼 POSISI AKTIF</span>
+    <span style="font-size:11px;font-weight:700;color:#FFFFFF;">{pos_lots} LOT ({pos_shares:,} LBR)</span>
   </div>
-  <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:4px">
-    <span style="font-size:11px;color:#D1D4DC">Untung / Rugi:</span>
-    <span style="font-size:16px;font-weight:800;color:{pos_pnl_color}">{pos_pnl_str} <span style="font-size:11px">({pos_pnl_pct:+.2f}%)</span></span>
+  <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:4px;">
+    <span style="font-size:11px;color:#8F96A8;">Untung / Rugi:</span>
+    <span style="font-size:16px;font-weight:800;color:{pos_pnl_color};">{pos_pnl_str} <span style="font-size:11px;">({pos_pnl_pct:+.2f}%)</span></span>
   </div>
-  <div style="display:flex;justify-content:space-between;font-size:10px;color:#787b86;margin-top:2px">
+  <div style="display:flex;justify-content:space-between;font-size:10px;color:#8F96A8;margin-top:2px;">
     <span>Entry: Rp{pos_entry:,.0f}</span>
     <span>Modal: Rp{pos_cost:,.0f}</span>
   </div>
 </div>""", unsafe_allow_html=True)
     else:
         st.markdown(f"""
-<div style="background:#181c27;border:1px solid #2A2E39;border-radius:6px;padding:6px 12px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
-  <span style="font-size:11px;color:#787b86">Posisi di {selected}:</span>
-  <span style="font-size:11px;font-weight:600;color:#888">0 Lot (Belum Beli)</span>
+<div style="background:#151924;border:1px solid #1E2433;border-radius:6px;padding:6px 12px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;">
+  <span style="font-size:11px;color:#8F96A8;">Posisi di {selected}:</span>
+  <span style="font-size:11px;font-weight:600;color:#6B7280;">0 Lot (Belum Beli)</span>
 </div>""", unsafe_allow_html=True)
 
+    # Manual order section header (CLEARLY SEPARATED FROM BOT SIGNAL)
+    st.markdown("""
+<div style="font-size:10px;font-weight:800;color:#8F96A8;letter-spacing:1px;margin-bottom:2px;">
+  ⚡ MANUAL ORDER (TRADER OVERRIDE)
+</div>
+<div style="font-size:9px;color:#6B7280;margin-bottom:6px;">
+  Eksekusi manual trader — BUKAN rekomendasi otomatis bot
+</div>""", unsafe_allow_html=True)
 
     # Buy/Sell buttons
     b1, b2 = st.columns(2)
@@ -726,9 +835,9 @@ with right:
 
     risk_rp = lots_input * 100 * (last_price - sl_input) if sl_input else 0
     rr_disp = round((tp_input - last_price) / max(last_price - sl_input, 1), 2) if sl_input < last_price else 0
-    st.markdown(f"<div style='font-size:11px;color:#787b86;margin:4px 0'>"
-                f"Risk: <b style='color:#ef5350'>Rp{risk_rp:,.0f}</b> &nbsp;|&nbsp; "
-                f"R:R <b style='color:#26a69a'>{rr_disp:.1f}x</b></div>",
+    st.markdown(f"<div style='font-size:11px;color:#8F96A8;margin:2px 0 6px 0;'>"
+                f"Risk: <b style='color:#FF5252;'>Rp{risk_rp:,.0f}</b> &nbsp;|&nbsp; "
+                f"R:R <b style='color:#00E676;'>{rr_disp:.1f}x</b></div>",
                 unsafe_allow_html=True)
 
     if do_buy:
@@ -747,9 +856,14 @@ with right:
             st.session_state["flash"] = "❌ Tidak ada posisi untuk dijual"
             st.rerun()
 
-    st.markdown("<hr style='border-color:#2A2E39;margin:8px 0'>", unsafe_allow_html=True)
+    st.markdown("<hr style='border-color:#2B3346;margin:8px 0'>", unsafe_allow_html=True)
 
-    # ── BOT ANALYSIS (using unified make_decision) ──
+    # ── SECTION B: BOT ANALYSIS (ALGORITHMIC DECISION) ──
+    st.markdown("""
+<div style="font-size:10px;font-weight:800;color:#8F96A8;letter-spacing:1px;margin-bottom:4px;">
+  🤖 BOT DECISION (ALGORITHMIC)
+</div>""", unsafe_allow_html=True)
+
     if data_ok:
         state     = dec["state"]
         sig_label = dec["signal_label"]
@@ -764,8 +878,8 @@ with right:
         rr_val    = dec.get("rr", 0)
 
         # State colors
-        state_color = {"BUY":"#26a69a","SETUP":"#2962FF","WAIT":"#FF6D00","AVOID":"#ef5350"}.get(state,"#787b86")
-        bar_c       = "#26a69a" if score >= 80 else "#2962FF" if score >= 65 else "#FF6D00" if score >= 40 else "#ef5350"
+        state_color = {"BUY":"#00E676","SETUP":"#FFD700","WAIT":"#2962FF","AVOID":"#FF5252"}.get(state,"#8F96A8")
+        bar_c       = "#00E676" if score >= 80 else "#FFD700" if score >= 65 else "#2962FF" if score >= 40 else "#FF5252"
 
         # Score breakdown bars
         bd_labels = {
@@ -780,10 +894,10 @@ with right:
             v    = bd.get(k, 0)
             mx   = bd_max.get(k, 10)
             pct  = max(0, min(100, int(abs(v) / mx * 100)))
-            clr  = "#26a69a" if v > 0 else "#ef5350" if v < 0 else "#2A2E39"
+            clr  = "#00E676" if v > 0 else "#FF5252" if v < 0 else "#2A2E39"
             bd_html += (
                 f"<div style='display:flex;align-items:center;gap:4px;padding:1px 0'>"
-                f"<span style='width:52px;font-size:9px;color:#787b86'>{lbl}</span>"
+                f"<span style='width:52px;font-size:9px;color:#8F96A8'>{lbl}</span>"
                 f"<div style='flex:1;background:#2A2E39;border-radius:2px;height:5px'>"
                 f"<div style='width:{pct}%;background:{clr};height:5px;border-radius:2px'></div></div>"
                 f"<span style='width:28px;font-size:9px;color:{clr};font-weight:700;text-align:right'>"
@@ -792,59 +906,61 @@ with right:
 
         # Hard filters
         hf_html = ""
-        for hf in hard_filters if False else hard_filt:
+        for hf in hard_filt:
             ic  = "✅" if hf["pass"] else "❌"
-            clr = "#26a69a" if hf["pass"] else "#ef5350"
+            clr = "#00E676" if hf["pass"] else "#FF5252"
             hf_html += (f"<div style='display:flex;justify-content:space-between;"
                         f"font-size:9px;padding:1px 0'>"
-                        f"<span style='color:#787b86'>{hf['name']}</span>"
+                        f"<span style='color:#8F96A8'>{hf['name']}</span>"
                         f"<span style='color:{clr}'>{ic} {'' if hf['pass'] else hf['reason']}</span></div>")
 
         # WHY / WHY NOT
         why_html = ""
         if r_pass:
-            why_html += "<div style='font-size:9px;color:#787b86;margin-top:6px;font-weight:700'>✅ WHY</div>"
+            why_html += "<div style='font-size:9px;color:#8F96A8;margin-top:6px;font-weight:700'>✅ WHY (CONDITIONS MET)</div>"
             for r in r_pass[:4]:
-                why_html += f"<div style='font-size:9px;color:#26a69a'>✓ {r}</div>"
+                why_html += f"<div style='font-size:9px;color:#00E676'>✓ {r}</div>"
         if r_fail:
-            why_html += "<div style='font-size:9px;color:#787b86;margin-top:4px;font-weight:700'>❌ WHY NOT</div>"
+            why_html += "<div style='font-size:9px;color:#8F96A8;margin-top:4px;font-weight:700'>❌ WHY NOT (BLOCKERS)</div>"
             for r in r_fail[:4]:
-                why_html += f"<div style='font-size:9px;color:#ef5350'>✗ {r}</div>"
+                why_html += f"<div style='font-size:9px;color:#FF5252'>✗ {r}</div>"
 
+        # Primary decision card
         st.markdown(f"""
-<div class="sig-card">
-  <div style="font-size:10px;color:#787b86;font-weight:700">🤖 BOT ANALYSIS</div>
-  <div style="font-size:22px;font-weight:700;color:{state_color};margin:4px 0">{sig_label}</div>
-  <div style="font-size:10px;color:#787b86;margin-bottom:6px">{strategy}</div>
-
-  <div style="display:flex;justify-content:space-between;align-items:center">
-    <span style="font-size:10px;color:#787b86">Score</span>
-    <span style="font-size:13px;font-weight:700;color:{bar_c}">{score}/100</span>
+<div style="background:#151924;border:1px solid #2B3346;border-radius:8px;padding:10px 12px;margin-bottom:6px;">
+  <div style="display:flex;justify-content:space-between;align-items:center;">
+    <span style="font-size:20px;font-weight:900;color:{state_color};">{sig_label}</span>
+    <span style="font-size:12px;font-weight:800;color:{bar_c};">Score: {score}/100</span>
   </div>
-  <div style="background:#2A2E39;border-radius:3px;height:6px;margin:4px 0 8px">
-    <div style="width:{score}%;background:{bar_c};height:6px;border-radius:3px"></div>
+  <div style="font-size:10px;color:#8F96A8;margin-top:2px;">Strategy: {strategy} · Regime: <b style="color:#FFFFFF">{regime}</b></div>
+  <div style="background:#2A2E39;border-radius:3px;height:5px;margin:6px 0;">
+    <div style="width:{score}%;background:{bar_c};height:5px;border-radius:3px"></div>
   </div>
-
-  <div style="font-size:9px;color:#787b86;font-weight:700;margin-bottom:3px">SCORE BREAKDOWN</div>
-  {bd_html}
-
-  <div style="font-size:9px;color:#787b86;font-weight:700;margin-top:8px;margin-bottom:3px">HARD FILTERS</div>
-  {hf_html}
-
-  {why_html}
-
-  <div style="font-size:9px;color:#787b86;font-weight:700;margin-top:8px;margin-bottom:3px">TRADE PLAN</div>
-  <div class="sig-row"><span>Regime</span><b>{regime}</b></div>
-  <div class="sig-row"><span>Entry</span><b>Rp{last_price:,.0f}</b></div>
-  <div class="sig-row"><span>SL</span><b style="color:#ef5350">Rp{sl_px:,.0f}</b></div>
-  <div class="sig-row"><span>TP</span><b style="color:#26a69a">Rp{tp_px:,.0f}</b></div>
-  <div class="sig-row"><span>Lots</span><b>{lots_rc} lot</b></div>
-  <div class="sig-row"><span>R:R</span><b style="color:#26a69a">{rr_val:.1f}x</b></div>
-  {f"<div style='font-size:9px;color:#ef5350;margin-top:4px'>{why_not}</div>" if why_not else ""}
 </div>""", unsafe_allow_html=True)
 
+        # Scrollable analysis breakdown container (keeps right panel height balanced)
+        with st.container(height=310):
+            st.markdown(f"""
+<div style="font-size:9px;color:#8F96A8;font-weight:800;margin-bottom:3px;">SCORE BREAKDOWN</div>
+{bd_html}
 
-    st.markdown("<hr style='border-color:#2A2E39;margin:8px 0'>", unsafe_allow_html=True)
+<div style="font-size:9px;color:#8F96A8;font-weight:800;margin-top:8px;margin-bottom:3px;">HARD FILTERS (ALL MUST PASS)</div>
+{hf_html}
+
+{why_html}
+
+<div style="font-size:9px;color:#8F96A8;font-weight:800;margin-top:8px;margin-bottom:3px;">TRADE PLAN TARGETS</div>
+<div class="sig-row"><span>Regime</span><b>{regime}</b></div>
+<div class="sig-row"><span>Entry</span><b>Rp{last_price:,.0f}</b></div>
+<div class="sig-row"><span>SL</span><b style="color:#FF5252">Rp{sl_px:,.0f}</b></div>
+<div class="sig-row"><span>TP</span><b style="color:#00E676">Rp{tp_px:,.0f}</b></div>
+<div class="sig-row"><span>Lots</span><b>{lots_rc} lot</b></div>
+<div class="sig-row"><span>R:R</span><b style="color:#00E676">{rr_val:.1f}x</b></div>
+{f"<div style='font-size:9px;color:#FF5252;margin-top:4px;'>{why_not}</div>" if why_not else ""}
+""", unsafe_allow_html=True)
+
+    st.markdown("<hr style='border-color:#2B3346;margin:6px 0'>", unsafe_allow_html=True)
+
 
     # ── CLAUDE AI ASSISTANT ──────────────────────────────
     claude_icon = "🤖 Claude" if CLAUDE_AVAILABLE else "🤖 Assistant"
@@ -1007,15 +1123,15 @@ Format jawaban: ringkas, bullet point jika perlu, langsung ke inti."""
 # ─────────────────────────────────────────
 st.markdown("<hr style='border-color:#2A2E39;margin:4px 0'>", unsafe_allow_html=True)
 
-tab_pos, tab_ord, tab_sig, tab_health = st.tabs(
-    ["💼 Positions", "📋 Orders", "📡 Signals", "🛠 System Health"]
+tab_pos, tab_ord, tab_sig, tab_bt, tab_health = st.tabs(
+    ["💼 POSITIONS", "📋 ORDERS", "📡 SIGNALS", "📈 BACKTEST", "🛠 SYSTEM HEALTH"]
 )
 
 with tab_pos:
     try:
         positions_fresh = get_positions()
         if positions_fresh.empty:
-            st.info("Tidak ada posisi aktif. Gunakan tombol BUY untuk membuka posisi.")
+            st.info("Tidak ada posisi aktif saat ini. Buka posisi melalui panel manual order.")
         else:
             pos_cols = st.columns(min(len(positions_fresh), 3))
             for i, (_, row) in enumerate(positions_fresh.iterrows()):
@@ -1027,11 +1143,12 @@ with tab_pos:
                         shares = int(row.get('shares', 0))
                         cost   = float(row.get('cost', 0))
                         pnl    = (cur_px * shares * 0.9975) - cost
-                        pnl_c  = "#26a69a" if pnl >= 0 else "#ef5350"
+                        pnl_c  = "#00E676" if pnl >= 0 else "#FF5252"
                         pnl_s  = f"+Rp{pnl:,.0f}" if pnl >= 0 else f"-Rp{abs(pnl):,.0f}"
+                        pnl_pct_card = (pnl / cost * 100) if cost > 0 else 0
                     except:
                         cur_px = float(row.get('entry', 0))
-                        pnl_c, pnl_s = "#787b86", "N/A"
+                        pnl_c, pnl_s, pnl_pct_card = "#8F96A8", "N/A", 0
 
                     entry = float(row.get('entry', 0))
                     sl    = float(row.get('stop', 0))
@@ -1039,15 +1156,23 @@ with tab_pos:
                     lots  = int(row.get('shares', 0)) // 100
 
                     st.markdown(f"""
-<div class="pos-card">
-  <b style="font-size:14px">{row['symbol']}</b>
-  <span style="color:#787b86;font-size:12px"> BUY · {lots} lot</span><br/>
-  Entry <b>Rp{entry:,.0f}</b> → Now <b>Rp{cur_px:,.0f}</b><br/>
-  SL <span style="color:#ef5350">Rp{sl:,.0f}</span> &nbsp;
-  TP <span style="color:#26a69a">Rp{tp:,.0f}</span><br/>
-  <b style="color:{pnl_c};font-size:16px">{pnl_s}</b>
+<div class="pos-card" style="background:#151924;border:1px solid #2B3346;border-radius:8px;padding:12px;">
+  <div style="display:flex;justify-content:space-between;align-items:center;">
+    <b style="font-size:16px;color:#FFFFFF;">{row['symbol']}</b>
+    <span style="color:#8F96A8;font-size:11px;">{lots} lot ({shares:,} lbr)</span>
+  </div>
+  <div style="font-size:12px;color:#8F96A8;margin:4px 0;">
+    Entry: <b>Rp{entry:,.0f}</b> → Now: <b>Rp{cur_px:,.0f}</b>
+  </div>
+  <div style="font-size:11px;color:#8F96A8;">
+    SL: <span style="color:#FF5252;">Rp{sl:,.0f}</span> &nbsp;|&nbsp;
+    TP: <span style="color:#00E676;">Rp{tp:,.0f}</span>
+  </div>
+  <div style="font-size:18px;font-weight:900;color:{pnl_c};margin-top:6px;">
+    {pnl_s} <span style="font-size:12px;font-weight:700;">({pnl_pct_card:+.2f}%)</span>
+  </div>
 </div>""", unsafe_allow_html=True)
-                    if st.button(f"🔴 Close {row['symbol']}", key=f"cls_{row['symbol']}",
+                    if st.button(f"🔴 Tutup Posisi {row['symbol']}", key=f"cls_{row['symbol']}",
                                  use_container_width=True):
                         ok, msg = paper_sell(str(row['symbol']), cur_px, "CLOSE POSITION")
                         st.session_state["flash"] = msg
@@ -1061,7 +1186,7 @@ with tab_ord:
     try:
         orders = get_orders_df()
         if orders.empty:
-            st.info("Belum ada order.")
+            st.info("Belum ada riwayat order.")
         else:
             want = ['ts','symbol','side','lots','price','status','reason','pnl']
             show = [c for c in want if c in orders.columns]
@@ -1076,13 +1201,13 @@ with tab_ord:
                     lambda x: (f"+Rp{float(x):,.0f}" if float(x) >= 0 else f"-Rp{abs(float(x)):,.0f}")
                     if pd.notna(x) else "-"
                 )
-            st.dataframe(disp, use_container_width=True, height=220)
+            st.dataframe(disp, use_container_width=True, height=240)
     except Exception as e:
         st.error(f"Orders error: {e}")
 
 with tab_sig:
     try:
-        st.markdown("**🤖 Bot Scan** — klik saham di watchlist kiri untuk analisis detail")
+        st.markdown("**📡 Scanner Signals Matrix (Semua Saham Watchlist)**")
         rows = []
         for sym in WATCHLIST:
             try:
@@ -1101,14 +1226,57 @@ with tab_sig:
                     "RSI(2)":   round(rsi_v, 1),
                     "Volume":   f"{vr_v:.1f}x",
                     "Lots":     r_s.get('lots', 0),
+                    "Reason":   sig_s.get('reason', '-'),
                 })
             except:
                 rows.append({"Symbol": sym, "Signal": "⚠️", "Score":0,
-                             "Harga":"-","Regime":"-","RSI(2)":0,"Volume":"-","Lots":0})
+                             "Harga":"-","Regime":"-","RSI(2)":0,"Volume":"-","Lots":0,"Reason":"Error"})
         sig_df = pd.DataFrame(rows)
-        st.dataframe(sig_df, use_container_width=True, height=320)
+        st.dataframe(sig_df, use_container_width=True, height=300)
     except Exception as e:
         st.error(f"Signals error: {e}")
+
+with tab_bt:
+    st.markdown("""
+<div style="font-size:12px;color:#8F96A8;margin-bottom:8px;">
+  <b>📈 Historical Backtest Engine (Multi-Layer Strategy - 3 Tahun)</b><br/>
+  Menguji portofolio 15 saham IDX dengan modal awal Rp100,000,000, filter regime, trailing SL/TP ATR, dan limit eksposur 60%.
+</div>""", unsafe_allow_html=True)
+    if st.button("▶ Jalankan Historical Backtest (3 Tahun Universe)", key="btn_run_bt", type="primary"):
+        with st.spinner("Menjalankan simulasi kuantitatif 3 tahun..."):
+            try:
+                st.session_state["backtest_res"] = run_historical_backtest()
+            except Exception as bt_e:
+                st.error(f"Backtest error: {bt_e}")
+            st.rerun()
+
+    res = st.session_state.get("backtest_res")
+    if res:
+        m1, m2, m3, m4, m5, m6 = st.columns(6)
+        m1.metric("Final Equity", f"Rp{res['final_equity']/1e6:.1f}M", f"{res['total_return']:+.1f}%")
+        m2.metric("Win Rate", f"{res['win_rate']:.1f}%", f"{res['total_trades']} trades")
+        m3.metric("Profit Factor", f"{res['profit_factor']:.2f}x")
+        m4.metric("Sharpe Ratio", f"{res['sharpe']:.2f}")
+        m5.metric("Max Drawdown", f"{res['max_dd']:.1f}%")
+        m6.metric("Expectancy", f"{res['expectancy']:+.2f}%")
+
+        if 'equity_df' in res and not res['equity_df'].empty:
+            eq_df = res['equity_df']
+            fig_bt = go.Figure()
+            fig_bt.add_trace(go.Scatter(x=eq_df.index, y=eq_df['equity'], name='Equity Curve',
+                                        line=dict(color='#00E676', width=2)))
+            fig_bt.update_layout(
+                template='plotly_dark', paper_bgcolor='#131722', plot_bgcolor='#131722',
+                height=260, margin=dict(l=0, r=0, t=10, b=0),
+                yaxis=dict(gridcolor='#2A2E39', side='right')
+            )
+            st.plotly_chart(fig_bt, use_container_width=True)
+
+        if 'trades_df' in res and not res['trades_df'].empty:
+            st.markdown("**📜 10 Transaksi Terakhir Backtest**")
+            st.dataframe(res['trades_df'].tail(10), use_container_width=True)
+    else:
+        st.info("Klik tombol di atas untuk menjalankan backtest historis 3 tahun pada universe saham.")
 
 with tab_health:
     try:
@@ -1118,15 +1286,15 @@ with tab_health:
 
         hc1, hc2, hc3, hc4 = st.columns(4)
         for col, label, val, color in [
-            (hc1, "Data Feed",   "🟢 Yahoo Finance",  "#26a69a"),
-            (hc2, "Paper DB",    "🟢 SQLite OK",       "#26a69a"),
-            (hc3, "Strategy",    "🟢 Multi-Layer v2",  "#26a69a"),
+            (hc1, "Data Feed",   "🟢 Yahoo Finance",  "#00E676"),
+            (hc2, "Paper DB",    "🟢 SQLite OK",       "#00E676"),
+            (hc3, "Strategy",    "🟢 Multi-Layer v2",  "#00E676"),
             (hc4, "Last Check",  now_str,               "#D1D4DC"),
         ]:
             col.markdown(
-                f"<div style='background:#1E222D;border:1px solid #2A2E39;border-radius:4px;"
+                f"<div style='background:#151924;border:1px solid #2B3346;border-radius:6px;"
                 f"padding:8px;text-align:center'>"
-                f"<div style='font-size:10px;color:#787b86'>{label}</div>"
+                f"<div style='font-size:10px;color:#8F96A8'>{label}</div>"
                 f"<div style='font-size:12px;font-weight:700;color:{color}'>{val}</div>"
                 f"</div>", unsafe_allow_html=True
             )
@@ -1143,4 +1311,5 @@ with tab_health:
 ```""")
     except Exception as e:
         st.error(f"Health error: {e}")
+
 
