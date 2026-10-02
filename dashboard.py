@@ -90,6 +90,45 @@ div.pos-card {
     background:#1E222D; border:1px solid #2A2E39;
     border-radius:6px; padding:10px; margin:4px 0; font-size:12px;
 }
+
+/* ── Watchlist buttons: strip all chrome, look like TradingView rows ── */
+div[data-testid="stVerticalBlock"] div[data-testid="stButton"] > button {
+    all: unset;
+    display: block;
+    width: 100%;
+    padding: 5px 8px;
+    font-size: 11px;
+    font-family: monospace;
+    color: #D1D4DC;
+    cursor: pointer;
+    border-bottom: 1px solid #1E222D;
+    box-sizing: border-box;
+    text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    border-radius: 3px;
+    line-height: 1.5;
+}
+div[data-testid="stVerticalBlock"] div[data-testid="stButton"] > button:hover {
+    background: #1a3a5c;
+    color: #FFFFFF;
+}
+div[data-testid="stVerticalBlock"] div[data-testid="stButton"] > button:focus {
+    outline: none;
+    background: #1a3a5c;
+}
+
+/* Collapse invisible watchlist click-capture buttons */
+div[data-testid="stVerticalBlock"] div[data-testid="stButton"].wl-click-btn > button {
+    height: 0 !important;
+    padding: 0 !important;
+    margin: -4px 0 0 0 !important;
+    overflow: hidden !important;
+    font-size: 0 !important;
+    opacity: 0 !important;
+    pointer-events: all !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -379,62 +418,67 @@ left, center, right = st.columns([1, 4, 1.4], gap="small")
 # LEFT — Watchlist
 # ══════════════════════════
 with left:
+    # ── WATCHLIST ─────────────────────────────────────────
+    # Strategy: compact HTML rows for display, one button per row for click
+    # CSS makes buttons height=1px transparent, overlapping the HTML row above
+
+    # Pre-load prices (all cached)
+    wl_data = {}
+    for sym in WATCHLIST:
+        px, pct = load_price(sym + ".JK")
+        wl_data[sym] = (px, pct)
+
+    # Header
     st.markdown(
-        "<div style='padding:4px 4px 6px;font-size:10px;color:#787b86;"
-        "font-weight:700;letter-spacing:1px;border-bottom:1px solid #2A2E39;"
-        "margin-bottom:2px'>WATCHLIST</div>",
+        "<div style='padding:4px 8px 5px;font-size:10px;color:#787b86;"
+        "font-weight:700;letter-spacing:1px;border-bottom:1px solid #2A2E39'>"
+        "WATCHLIST</div>",
         unsafe_allow_html=True
     )
 
-    # Pre-load all prices so we can embed them in radio labels
-    wl_labels = []
-    wl_prices = {}
+    # Render all rows as one HTML block (no buttons = no gap)
+    rows_html = ""
     for sym in WATCHLIST:
-        px, pct = load_price(sym + ".JK")
-        wl_prices[sym] = (px, pct)
-        sign = "+" if pct >= 0 else ""
-        wl_labels.append(f"{sym}  {px:,.0f}  {sign}{pct:.2f}%")
+        px, pct    = wl_data[sym]
+        sign       = "+" if pct >= 0 else ""
+        clr        = "#26a69a" if pct >= 0 else "#ef5350"
+        is_active  = sym == selected
+        bg         = "background:#1E2A3C;" if is_active else ""
+        bl         = "border-left:3px solid #2962FF;" if is_active else "border-left:3px solid transparent;"
+        sym_clr    = "#FFFFFF" if is_active else "#D1D4DC"
+        rows_html += (
+            f"<div style='display:flex;justify-content:space-between;"
+            f"align-items:center;padding:5px 8px;{bg}{bl}"
+            f"border-bottom:1px solid #1E222D;cursor:pointer' "
+            f"onclick=\"\">"
+            f"<span style='font-size:11px;font-weight:700;color:{sym_clr}'>{sym}</span>"
+            f"<span style='text-align:right;line-height:1.2'>"
+            f"<span style='font-size:11px;color:#D1D4DC'>{px:,.0f}</span><br/>"
+            f"<span style='font-size:9px;color:{clr}'>{sign}{pct:.2f}%</span>"
+            f"</span></div>"
+        )
+    st.markdown(rows_html, unsafe_allow_html=True)
 
-    # Inject CSS to style the radio into a compact watchlist
-    st.markdown("""
-<style>
-div[data-testid="stRadio"] > div {gap: 0 !important;}
-div[data-testid="stRadio"] label {
-    padding: 4px 6px !important;
-    border-radius: 3px;
-    cursor: pointer;
-    width: 100%;
-    font-family: monospace;
-    font-size: 11px !important;
-}
-div[data-testid="stRadio"] label:hover {background:#1a3a5c !important;}
-div[data-testid="stRadio"] label[data-baseweb="radio"] {border: none !important;}
-div[data-testid="stRadio"] p {
-    font-size: 11px !important;
-    margin: 0 !important;
-    white-space: pre;
-    letter-spacing: 0;
-}
-</style>""", unsafe_allow_html=True)
-
-    idx_now = WATCHLIST.index(selected) if selected in WATCHLIST else 0
-    chosen_label = st.radio(
-        "", wl_labels,
-        index=idx_now,
-        key="wl_radio",
-        label_visibility="collapsed"
+    # One compact selectbox for actual selection (collapsed/hidden style)
+    st.markdown(
+        "<div style='padding:4px 8px;font-size:9px;color:#787b86'>▶ Pilih saham:</div>",
+        unsafe_allow_html=True
     )
-    # Resolve back to symbol
-    chosen_sym = WATCHLIST[wl_labels.index(chosen_label)] if chosen_label in wl_labels else selected
-    if chosen_sym != selected:
-        st.session_state["sym"] = chosen_sym
+    sel_idx = WATCHLIST.index(selected) if selected in WATCHLIST else 0
+    new_sel = st.selectbox(
+        "", WATCHLIST, index=sel_idx,
+        key="wl_select", label_visibility="collapsed"
+    )
+    if new_sel != selected:
+        st.session_state["sym"] = new_sel
         st.rerun()
 
-    # Bot Scan summary
+    # ── BOT SCAN ─────────────────────────────────────────
     st.markdown(
-        "<div style='padding:6px 4px 4px;font-size:10px;color:#787b86;"
-        "font-weight:700;letter-spacing:1px;border-top:1px solid #2A2E39;"
-        "margin-top:6px'>BOT SCAN</div>",
+        "<div style='margin-top:8px;padding:4px 8px 5px;font-size:10px;"
+        "color:#787b86;font-weight:700;letter-spacing:1px;"
+        "border-top:1px solid #2A2E39;border-bottom:1px solid #2A2E39'>"
+        "BOT SCAN</div>",
         unsafe_allow_html=True
     )
     buy_count = wait_count = 0
@@ -446,13 +490,21 @@ div[data-testid="stRadio"] p {
             else: wait_count += 1
         except:
             wait_count += 1
+
     st.markdown(
-        f"<div style='padding:4px 6px;font-size:11px'>"
-        f"🟢 BUY &nbsp;<b>{buy_count}</b><br/>"
-        f"🟡 WAIT &nbsp;<b>{wait_count}</b>"
+        f"<div style='padding:6px 8px;font-size:11px;'>"
+        f"<div style='display:flex;justify-content:space-between;"
+        f"padding:3px 0;border-bottom:1px solid #1E222D'>"
+        f"<span style='color:#787b86'>BUY ready</span>"
+        f"<b style='color:#26a69a'>{buy_count}</b></div>"
+        f"<div style='display:flex;justify-content:space-between;padding:3px 0'>"
+        f"<span style='color:#787b86'>Watching</span>"
+        f"<b style='color:#FF6D00'>{wait_count}</b></div>"
         f"</div>",
         unsafe_allow_html=True
     )
+
+
 
 
 # ══════════════════════════
