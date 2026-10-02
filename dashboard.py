@@ -298,44 +298,70 @@ except Exception as e:
     df, last_price, chg_pct, chg_color, chg_sign = None, 0, 0, "#787b86", "─"
     data_ok = False
 
-t1,t2,t3,t4,t5,t6,t7,t8 = st.columns([1.5, 2, 1, 1, 1, 0.8, 0.8, 0.6])
-t1.markdown(
-    f"<div style='padding-top:6px'><b style='font-size:15px'>📈 IDXBot</b> "
-    f"<span style='color:#26a69a;font-size:11px'>● PAPER</span></div>",
-    unsafe_allow_html=True
-)
-t2.markdown(
-    f"<div style='padding-top:4px;font-size:18px;font-weight:700'>"
-    f"{selected}&nbsp;"
-    f"<span style='color:{chg_color}'>{last_price:,.0f} {chg_sign}{abs(chg_pct):.2f}%</span>"
-    f"</div>",
-    unsafe_allow_html=True
-)
+# ── TOP BAR — single HTML row for pixel-perfect alignment ──
+pnl_pos = 0.0
+if not positions.empty and data_ok:
+    try:
+        sym_short = selected  # e.g. BBCA
+        pos_row = positions[positions['symbol'] == sym_short]
+        if not pos_row.empty:
+            entry_p = float(pos_row.iloc[0].get('entry', 0))
+            shares_p = int(pos_row.iloc[0].get('shares', 0))
+            cost_p   = float(pos_row.iloc[0].get('cost', 0))
+            pnl_pos  = (last_price * shares_p * 0.9975) - cost_p
+    except:
+        pass
 
-def _metric(col, label, value):
-    col.markdown(
-        f"<div style='background:#1E222D;border:1px solid #2A2E39;border-radius:4px;"
-        f"padding:4px 8px;text-align:center'>"
-        f"<div style='font-size:10px;color:#787b86'>{label}</div>"
-        f"<div style='font-size:14px;font-weight:700;color:#D1D4DC'>{value}</div>"
-        f"</div>",
-        unsafe_allow_html=True
-    )
+pnl_color = "#26a69a" if pnl_pos >= 0 else "#ef5350"
+pnl_str   = f"+Rp{pnl_pos:,.0f}" if pnl_pos >= 0 else f"-Rp{abs(pnl_pos):,.0f}"
+has_pos   = pnl_pos != 0
 
-_metric(t3, "Equity",    f"Rp{equity/1e6:.1f}M")
-_metric(t4, "Cash",      f"Rp{cash/1e6:.1f}M")
-_metric(t5, "Invested",  f"Rp{invested/1e6:.1f}M")
-_metric(t6, "Pos",       f"{len(positions)}/5")
+top_ctrl1, top_ctrl2, top_ctrl3 = st.columns([7, 1, 0.6])
+
+with top_ctrl1:
+    st.markdown(f"""
+<div style="display:flex;align-items:center;gap:16px;padding:4px 0">
+  <div>
+    <span style="font-size:14px;font-weight:700">📈 IDXBot</span>
+    <span style="font-size:10px;color:#26a69a;margin-left:4px">● PAPER</span>
+  </div>
+  <div style="font-size:18px;font-weight:700">
+    {selected}&nbsp;<span style="color:{chg_color}">{last_price:,.0f} {chg_sign}{abs(chg_pct):.2f}%</span>
+  </div>
+  <div style="display:flex;gap:8px;margin-left:8px">
+    <div style="background:#1E222D;border:1px solid #2A2E39;border-radius:4px;padding:3px 10px;text-align:center;min-width:70px">
+      <div style="font-size:9px;color:#787b86">Equity</div>
+      <div style="font-size:13px;font-weight:700">Rp{equity/1e6:.1f}M</div>
+    </div>
+    <div style="background:#1E222D;border:1px solid #2A2E39;border-radius:4px;padding:3px 10px;text-align:center;min-width:70px">
+      <div style="font-size:9px;color:#787b86">Cash</div>
+      <div style="font-size:13px;font-weight:700">Rp{cash/1e6:.1f}M</div>
+    </div>
+    <div style="background:#1E222D;border:1px solid #2A2E39;border-radius:4px;padding:3px 10px;text-align:center;min-width:70px">
+      <div style="font-size:9px;color:#787b86">Invested</div>
+      <div style="font-size:13px;font-weight:700">Rp{invested/1e6:.1f}M</div>
+    </div>
+    <div style="background:#1E222D;border:1px solid #2A2E39;border-radius:4px;padding:3px 10px;text-align:center;min-width:45px">
+      <div style="font-size:9px;color:#787b86">Pos</div>
+      <div style="font-size:13px;font-weight:700">{len(positions)}/5</div>
+    </div>
+    {f'''<div style="background:#1E222D;border:1px solid #2A2E39;border-radius:4px;padding:3px 10px;text-align:center;min-width:90px">
+      <div style="font-size:9px;color:#787b86">{selected} P&L</div>
+      <div style="font-size:13px;font-weight:700;color:{pnl_color}">{pnl_str}</div>
+    </div>''' if has_pos else ''}
+  </div>
+</div>""", unsafe_allow_html=True)
 
 period_opts = {"1m":"1mo","3m":"3mo","6m":"6mo","1y":"1y","3y":"3y"}
-chosen = t7.selectbox("", list(period_opts.keys()), index=3, label_visibility="collapsed")
+chosen = top_ctrl2.selectbox("", list(period_opts.keys()), index=3, label_visibility="collapsed")
 if period_opts[chosen] != st.session_state["period"]:
     st.session_state["period"] = period_opts[chosen]
     st.rerun()
 
-if t8.button("Exit"):
+if top_ctrl3.button("Exit"):
     st.session_state["logged_in"] = False
     st.rerun()
+
 
 # Flash messages
 if "flash" in st.session_state:
@@ -353,56 +379,81 @@ left, center, right = st.columns([1, 4, 1.4], gap="small")
 # LEFT — Watchlist
 # ══════════════════════════
 with left:
-    st.markdown("<div style='padding:6px 4px;font-size:11px;color:#787b86;font-weight:700;"
-                "border-bottom:1px solid #2A2E39;margin-bottom:4px'>WATCHLIST</div>",
-                unsafe_allow_html=True)
-    
-    # Single radio for symbol selection — much cleaner than HTML+button
-    sym_choice = st.radio(
-        "", WATCHLIST,
-        index=WATCHLIST.index(selected) if selected in WATCHLIST else 0,
+    st.markdown(
+        "<div style='padding:4px 4px 6px;font-size:10px;color:#787b86;"
+        "font-weight:700;letter-spacing:1px;border-bottom:1px solid #2A2E39;"
+        "margin-bottom:2px'>WATCHLIST</div>",
+        unsafe_allow_html=True
+    )
+
+    # Pre-load all prices so we can embed them in radio labels
+    wl_labels = []
+    wl_prices = {}
+    for sym in WATCHLIST:
+        px, pct = load_price(sym + ".JK")
+        wl_prices[sym] = (px, pct)
+        sign = "+" if pct >= 0 else ""
+        wl_labels.append(f"{sym}  {px:,.0f}  {sign}{pct:.2f}%")
+
+    # Inject CSS to style the radio into a compact watchlist
+    st.markdown("""
+<style>
+div[data-testid="stRadio"] > div {gap: 0 !important;}
+div[data-testid="stRadio"] label {
+    padding: 4px 6px !important;
+    border-radius: 3px;
+    cursor: pointer;
+    width: 100%;
+    font-family: monospace;
+    font-size: 11px !important;
+}
+div[data-testid="stRadio"] label:hover {background:#1a3a5c !important;}
+div[data-testid="stRadio"] label[data-baseweb="radio"] {border: none !important;}
+div[data-testid="stRadio"] p {
+    font-size: 11px !important;
+    margin: 0 !important;
+    white-space: pre;
+    letter-spacing: 0;
+}
+</style>""", unsafe_allow_html=True)
+
+    idx_now = WATCHLIST.index(selected) if selected in WATCHLIST else 0
+    chosen_label = st.radio(
+        "", wl_labels,
+        index=idx_now,
         key="wl_radio",
         label_visibility="collapsed"
     )
-    if sym_choice != selected:
-        st.session_state["sym"] = sym_choice
+    # Resolve back to symbol
+    chosen_sym = WATCHLIST[wl_labels.index(chosen_label)] if chosen_label in wl_labels else selected
+    if chosen_sym != selected:
+        st.session_state["sym"] = chosen_sym
         st.rerun()
 
-    # Price overlay next to radio labels via markdown
-    for sym in WATCHLIST:
-        price, pct = load_price(sym + ".JK")
-        pct_color = "#26a69a" if pct >= 0 else "#ef5350"
-        pct_sign  = "+" if pct >= 0 else ""
-        is_active = sym == selected
-        border = "border-left:3px solid #2962FF;" if is_active else "border-left:3px solid transparent;"
-        bg = "background:#1a3a5c;" if is_active else ""
-        st.markdown(f"""
-<div style='display:flex;justify-content:space-between;align-items:center;
-            padding:3px 6px;margin:-28px 0 2px 20px;
-            {bg}{border}border-radius:3px;pointer-events:none'>
-  <span style='font-size:11px;color:#787b86'></span>
-  <div style='text-align:right'>
-    <span style='font-size:12px;font-weight:700;color:#D1D4DC'>{price:,.0f}</span>
-    <span style='font-size:10px;color:{pct_color};margin-left:4px'>{pct_sign}{pct:.2f}%</span>
-  </div>
-</div>""", unsafe_allow_html=True)
-
-    st.markdown("<div style='padding:8px 4px;font-size:11px;color:#787b86;font-weight:700;"
-                "border-top:1px solid #2A2E39;margin-top:8px'>BOT SCAN</div>", unsafe_allow_html=True)
+    # Bot Scan summary
+    st.markdown(
+        "<div style='padding:6px 4px 4px;font-size:10px;color:#787b86;"
+        "font-weight:700;letter-spacing:1px;border-top:1px solid #2A2E39;"
+        "margin-top:6px'>BOT SCAN</div>",
+        unsafe_allow_html=True
+    )
     buy_count = wait_count = 0
     for sym in WATCHLIST:
         try:
             df_scan = load_chart(sym + ".JK", "3mo")
-            r = risk_check(df_scan, capital=equity)
-            if r.get('approved'): buy_count += 1
+            d = make_decision(df_scan, capital=equity)
+            if d.get('approved'): buy_count += 1
             else: wait_count += 1
         except:
             wait_count += 1
-    st.markdown(f"""
-<div style="padding:8px;font-size:12px">
-  🟢 BUY &nbsp;&nbsp;&nbsp; <b>{buy_count}</b><br/>
-  🟡 WAIT &nbsp; <b>{wait_count}</b>
-</div>""", unsafe_allow_html=True)
+    st.markdown(
+        f"<div style='padding:4px 6px;font-size:11px'>"
+        f"🟢 BUY &nbsp;<b>{buy_count}</b><br/>"
+        f"🟡 WAIT &nbsp;<b>{wait_count}</b>"
+        f"</div>",
+        unsafe_allow_html=True
+    )
+
 
 # ══════════════════════════
 # CENTER — Chart
