@@ -159,6 +159,24 @@ def db_init():
             price REAL, status TEXT, reason TEXT, pnl REAL DEFAULT 0);
         CREATE TABLE IF NOT EXISTS kv(k TEXT PRIMARY KEY, v REAL);
         """)
+        # ── Migrate old DB: add any missing columns safely ──
+        migrations = [
+            ("orders",    "ts",         "TEXT"),
+            ("orders",    "side",       "TEXT"),
+            ("orders",    "lots",       "INT DEFAULT 0"),
+            ("orders",    "status",     "TEXT"),
+            ("orders",    "reason",     "TEXT"),
+            ("orders",    "pnl",        "REAL DEFAULT 0"),
+            ("positions", "tp",         "REAL DEFAULT 0"),
+            ("positions", "cost",       "REAL DEFAULT 0"),
+            ("positions", "entry_date", "TEXT"),
+        ]
+        for table, col, col_type in migrations:
+            try:
+                c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")
+            except Exception:
+                pass  # Column already exists — fine
+
         if not c.execute("SELECT 1 FROM kv WHERE k='cash'").fetchone():
             c.execute("INSERT INTO kv VALUES('cash',?)", (INITIAL_CAPITAL,))
         c.commit()
