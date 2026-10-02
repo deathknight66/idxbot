@@ -11,7 +11,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from engine import (
     get_market_data, calculate_indicators, signal_engine,
-    risk_check, INITIAL_CAPITAL, UNIVERSE
+    risk_check, make_decision, INITIAL_CAPITAL, UNIVERSE
 )
 
 try:
@@ -547,117 +547,156 @@ with right:
     b1, b2 = st.columns(2)
     do_buy  = b1.button("🟢 BUY",  use_container_width=True, key="main_buy")
     do_sell = b2.button("🔴 SELL", use_container_width=True, key="main_sell")
-    
+
+    # ── Run unified decision engine ──
     if data_ok:
-        risk = risk_check(df, capital=equity)
-        sl_px   = float(risk.get('stop_loss',   last_price * 0.95))
-        tp_px   = float(risk.get('take_profit', last_price * 1.05))
-        lots_rc = int(risk.get('lots', 0))
+        try:
+            dec = make_decision(df, capital=equity)
+        except Exception as dec_e:
+            dec = {"state":"WAIT","signal_label":"🟡 WAIT","approved":False,
+                   "total_score":0,"score_breakdown":{},"hard_filters":[],
+                   "reasons_pass":[],"reasons_fail":[],"why_not":str(dec_e),
+                   "regime":"?","strategy":"?","entry":last_price,
+                   "stop_loss":last_price*0.95,"take_profit":last_price*1.05,
+                   "lots":0,"rr":0,"support":0,"resistance":0}
     else:
-        risk = {}; sl_px = 0; tp_px = 0; lots_rc = 0
-    
+        dec = {"state":"WAIT","signal_label":"🟡 WAIT","approved":False,
+               "total_score":0,"score_breakdown":{},"hard_filters":[],
+               "reasons_pass":[],"reasons_fail":[],"why_not":"No data",
+               "regime":"?","strategy":"?","entry":0,
+               "stop_loss":0,"take_profit":0,"lots":0,"rr":0,"support":0,"resistance":0}
+
+    sl_px   = float(dec.get("stop_loss",   last_price * 0.95))
+    tp_px   = float(dec.get("take_profit", last_price * 1.05))
+    lots_rc = int(dec.get("lots", 0))
+
     # Lot override
     lots_input = st.number_input("Quantity (lot)", min_value=1,
                                   value=max(1, lots_rc), step=1)
-    
     c1, c2 = st.columns(2)
     sl_input = c1.number_input("Stop Loss", value=int(sl_px), step=50)
     tp_input = c2.number_input("Take Profit", value=int(tp_px), step=50)
-    
+
     risk_rp = lots_input * 100 * (last_price - sl_input) if sl_input else 0
+    rr_disp = round((tp_input - last_price) / max(last_price - sl_input, 1), 2) if sl_input < last_price else 0
     st.markdown(f"<div style='font-size:11px;color:#787b86;margin:4px 0'>"
-                f"Est. Risk: <b style='color:#ef5350'>Rp{risk_rp:,.0f}</b></div>",
+                f"Risk: <b style='color:#ef5350'>Rp{risk_rp:,.0f}</b> &nbsp;|&nbsp; "
+                f"R:R <b style='color:#26a69a'>{rr_disp:.1f}x</b></div>",
                 unsafe_allow_html=True)
-    
+
     if do_buy:
         ok, msg = paper_buy(symbol, lots_input, last_price, sl_input, tp_input)
         st.session_state["flash"] = msg
         if ok: st.cache_data.clear()
         st.rerun()
-    
+
     if do_sell:
-        if symbol in positions['symbol'].values:
-            ok, msg = paper_sell(symbol, last_price)
+        if not positions.empty and symbol.replace(".JK","") in positions['symbol'].values:
+            ok, msg = paper_sell(symbol.replace(".JK",""), last_price)
             st.session_state["flash"] = msg
             if ok: st.cache_data.clear()
             st.rerun()
         else:
             st.session_state["flash"] = "❌ Tidak ada posisi untuk dijual"
             st.rerun()
-    
+
     st.markdown("<hr style='border-color:#2A2E39;margin:8px 0'>", unsafe_allow_html=True)
-    
-    # ── BOT ANALYSIS ──
+
+    # ── BOT ANALYSIS (using unified make_decision) ──
     if data_ok:
-        try:
-            sig      = signal_engine(df)
-            score    = sig.get('total_score', 0)
-            regime   = sig.get('regime', 'UNKNOWN')
-            strategy = sig.get('strategy', 'Multi-Strategy')
-            breakdown = sig.get('score_breakdown', {})
-            approved = risk.get('approved', False)
-        except Exception as e:
-            score = 0; regime = "UNKNOWN"; strategy = "N/A"
-            breakdown = {}; approved = False
-        
-        sig_color = "#26a69a" if approved else "#ef5350"
-        sig_label = "🟢 BUY" if approved else "🔴 WAIT"
-        
-        # Score bar
-        bar_w  = max(0, min(100, score))
-        bar_c  = "#26a69a" if score >= 65 else "#FF6D00" if score >= 50 else "#ef5350"
-        
-        # Build breakdown rows
+        state     = dec["state"]
+        sig_label = dec["signal_label"]
+        score     = dec["total_score"]
+        bd        = dec["score_breakdown"]
+        regime    = dec["regime"]
+        strategy  = dec["strategy"]
+        hard_filt = dec["hard_filters"]
+        r_pass    = dec["reasons_pass"]
+        r_fail    = dec["reasons_fail"]
+        why_not   = dec["why_not"]
+        rr_val    = dec.get("rr", 0)
+
+        # State colors
+        state_color = {"BUY":"#26a69a","SETUP":"#2962FF","WAIT":"#FF6D00","AVOID":"#ef5350"}.get(state,"#787b86")
+        bar_c       = "#26a69a" if score >= 80 else "#2962FF" if score >= 65 else "#FF6D00" if score >= 40 else "#ef5350"
+
+        # Score breakdown bars
         bd_labels = {
-            "regime": "Market Regime", "liquidity": "Liquidity",
-            "rsi_2": "RSI-2 Connors", "trend": "Trend Following",
-            "breakout": "Breakout", "mean_reversion": "Bollinger Rev.",
-            "volume": "Volume Intel", "support_proximity": "Near Support",
+            "regime":"Regime","liquidity":"Liquidity","rsi_2":"RSI-2",
+            "trend":"Trend","breakout":"Breakout","mean_reversion":"BB Rev.",
+            "volume":"Volume","support_proximity":"Support",
         }
+        bd_max = {"regime":15,"liquidity":8,"rsi_2":25,"trend":20,
+                  "breakout":20,"mean_reversion":20,"volume":15,"support_proximity":7}
         bd_html = ""
-        for k, label in bd_labels.items():
-            v = breakdown.get(k, 0)
-            if v == 0:
-                continue
-            max_v = {"regime":15,"liquidity":8,"rsi_2":25,"trend":20,
-                     "breakout":20,"mean_reversion":20,"volume":15,"support_proximity":7}.get(k,10)
-            pct = max(0, min(100, int(v / max_v * 100)))
-            color = "#26a69a" if v > 0 else "#ef5350"
-            bd_html += f"""
-<div style="display:flex;align-items:center;gap:6px;padding:2px 0;">
-  <span style="width:90px;font-size:10px;color:#787b86">{label}</span>
-  <div style="flex:1;background:#2A2E39;border-radius:2px;height:6px">
-    <div style="width:{pct}%;background:{color};height:6px;border-radius:2px"></div>
-  </div>
-  <span style="width:24px;font-size:10px;color:{color};font-weight:700">{v:+.0f}</span>
-</div>"""
-        
+        for k, lbl in bd_labels.items():
+            v    = bd.get(k, 0)
+            mx   = bd_max.get(k, 10)
+            pct  = max(0, min(100, int(abs(v) / mx * 100)))
+            clr  = "#26a69a" if v > 0 else "#ef5350" if v < 0 else "#2A2E39"
+            bd_html += (
+                f"<div style='display:flex;align-items:center;gap:4px;padding:1px 0'>"
+                f"<span style='width:52px;font-size:9px;color:#787b86'>{lbl}</span>"
+                f"<div style='flex:1;background:#2A2E39;border-radius:2px;height:5px'>"
+                f"<div style='width:{pct}%;background:{clr};height:5px;border-radius:2px'></div></div>"
+                f"<span style='width:28px;font-size:9px;color:{clr};font-weight:700;text-align:right'>"
+                f"{v:+.0f}/{mx}</span></div>"
+            )
+
+        # Hard filters
+        hf_html = ""
+        for hf in hard_filters if False else hard_filt:
+            ic  = "✅" if hf["pass"] else "❌"
+            clr = "#26a69a" if hf["pass"] else "#ef5350"
+            hf_html += (f"<div style='display:flex;justify-content:space-between;"
+                        f"font-size:9px;padding:1px 0'>"
+                        f"<span style='color:#787b86'>{hf['name']}</span>"
+                        f"<span style='color:{clr}'>{ic} {'' if hf['pass'] else hf['reason']}</span></div>")
+
+        # WHY / WHY NOT
+        why_html = ""
+        if r_pass:
+            why_html += "<div style='font-size:9px;color:#787b86;margin-top:6px;font-weight:700'>✅ WHY</div>"
+            for r in r_pass[:4]:
+                why_html += f"<div style='font-size:9px;color:#26a69a'>✓ {r}</div>"
+        if r_fail:
+            why_html += "<div style='font-size:9px;color:#787b86;margin-top:4px;font-weight:700'>❌ WHY NOT</div>"
+            for r in r_fail[:4]:
+                why_html += f"<div style='font-size:9px;color:#ef5350'>✗ {r}</div>"
+
         st.markdown(f"""
 <div class="sig-card">
-  <div style="font-size:12px;font-weight:700;color:#787b86;margin-bottom:4px">🤖 BOT ANALYSIS</div>
-  <div style="font-size:18px;font-weight:700;color:{sig_color}">{sig_label}</div>
-  <div style="font-size:11px;color:#787b86;margin-bottom:6px">{strategy}</div>
-  
-  <div style="display:flex;justify-content:space-between;margin-bottom:4px">
-    <span style="font-size:11px;color:#787b86">Score</span>
-    <span style="font-size:14px;font-weight:700;color:{bar_c}">{score}/100</span>
+  <div style="font-size:10px;color:#787b86;font-weight:700">🤖 BOT ANALYSIS</div>
+  <div style="font-size:22px;font-weight:700;color:{state_color};margin:4px 0">{sig_label}</div>
+  <div style="font-size:10px;color:#787b86;margin-bottom:6px">{strategy}</div>
+
+  <div style="display:flex;justify-content:space-between;align-items:center">
+    <span style="font-size:10px;color:#787b86">Score</span>
+    <span style="font-size:13px;font-weight:700;color:{bar_c}">{score}/100</span>
   </div>
-  <div style="background:#2A2E39;border-radius:4px;height:8px;margin-bottom:8px">
-    <div style="width:{bar_w}%;background:{bar_c};height:8px;border-radius:4px"></div>
+  <div style="background:#2A2E39;border-radius:3px;height:6px;margin:4px 0 8px">
+    <div style="width:{score}%;background:{bar_c};height:6px;border-radius:3px"></div>
   </div>
-  
-  <div style="font-size:10px;color:#787b86;font-weight:700;margin-bottom:4px">SCORE BREAKDOWN</div>
+
+  <div style="font-size:9px;color:#787b86;font-weight:700;margin-bottom:3px">SCORE BREAKDOWN</div>
   {bd_html}
-  
-  <div style="font-size:10px;color:#787b86;font-weight:700;margin-top:8px;margin-bottom:4px">TRADE PLAN</div>
+
+  <div style="font-size:9px;color:#787b86;font-weight:700;margin-top:8px;margin-bottom:3px">HARD FILTERS</div>
+  {hf_html}
+
+  {why_html}
+
+  <div style="font-size:9px;color:#787b86;font-weight:700;margin-top:8px;margin-bottom:3px">TRADE PLAN</div>
   <div class="sig-row"><span>Regime</span><b>{regime}</b></div>
   <div class="sig-row"><span>Entry</span><b>Rp{last_price:,.0f}</b></div>
-  <div class="sig-row"><span>Stop Loss</span><b style="color:#ef5350">Rp{sl_px:,.0f}</b></div>
-  <div class="sig-row"><span>Take Profit</span><b style="color:#26a69a">Rp{tp_px:,.0f}</b></div>
+  <div class="sig-row"><span>SL</span><b style="color:#ef5350">Rp{sl_px:,.0f}</b></div>
+  <div class="sig-row"><span>TP</span><b style="color:#26a69a">Rp{tp_px:,.0f}</b></div>
   <div class="sig-row"><span>Lots</span><b>{lots_rc} lot</b></div>
-  <div style="font-size:10px;color:#787b86;margin-top:4px">{risk.get("reason","")}</div>
+  <div class="sig-row"><span>R:R</span><b style="color:#26a69a">{rr_val:.1f}x</b></div>
+  {f"<div style='font-size:9px;color:#ef5350;margin-top:4px'>{why_not}</div>" if why_not else ""}
 </div>""", unsafe_allow_html=True)
-    
+
+
     st.markdown("<hr style='border-color:#2A2E39;margin:8px 0'>", unsafe_allow_html=True)
 
     # ── CLAUDE AI ASSISTANT ──────────────────────────────

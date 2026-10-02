@@ -761,103 +761,241 @@ def penetration_engine(df):
 
 
 # ============================================================
-# RISK ENGINE
+# UNIFIED DECISION ENGINE
 # ============================================================
+# This is the SINGLE source of truth for trading decisions.
+# signal_engine() + risk sizing + hard filters → one output.
+# dashboard.py calls make_decision(), never risk_check() alone.
 
-def risk_check(
-    df,
-    capital=INITIAL_CAPITAL,
-    risk_per_trade=0.01,
-):
+# Signal state labels
+SIGNAL_AVOID  = "🔴 AVOID"     # score < 40 or hard filter failed
+SIGNAL_WAIT   = "🟡 WAIT"      # score 40-64
+SIGNAL_SETUP  = "🔵 SETUP"     # score 65-79
+SIGNAL_BUY    = "🟢 BUY"       # score ≥ 80 + all filters pass
 
+def risk_check(df, capital=INITIAL_CAPITAL, risk_per_trade=0.01):
+    """
+    Legacy wrapper — kept for backward compatibility.
+    Returns minimal risk sizing info without signal validation.
+    New code should call make_decision() instead.
+    """
     latest = df.iloc[-1]
+    price  = float(latest["close"])
+    atr    = float(latest["atr"]) if not pd.isna(latest.get("atr", float('nan'))) else 0
 
-    price = latest["close"]
-    atr = latest["atr"]
-
-    import sqlite3
-    import os
-    open_positions = 0
-    invested_capital = 0
+    import sqlite3, os
+    open_positions, invested_capital = 0, 0
     try:
         if os.path.exists('data/paper.db'):
             with sqlite3.connect('data/paper.db') as conn:
-                positions = conn.execute("SELECT cost FROM positions").fetchall()
-                open_positions = len(positions)
-                invested_capital = sum([p[0] for p in positions])
+                rows = conn.execute("SELECT cost FROM positions").fetchall()
+                open_positions   = len(rows)
+                invested_capital = sum(float(r[0]) for r in rows if r[0])
     except:
         pass
 
     if open_positions >= 5:
-        return {"approved": False, "reason": "MAX POSITIONS (5) HIT"}
-        
-    if invested_capital >= (capital * 0.6):
-        return {"approved": False, "reason": "MAX EXPOSURE (60%) HIT"}
+        return {"approved": False, "reason": "MAX POSITIONS (5) HIT", "lots": 0}
+    if invested_capital >= capital * 0.6:
+        return {"approved": False, "reason": "MAX EXPOSURE (60%) HIT", "lots": 0}
+    if atr <= 0 or price <= 0:
+        return {"approved": False, "reason": "Invalid ATR/price", "lots": 0}
 
-    if pd.isna(atr) or price <= 0:
-
-        return {
-            "approved": False,
-            "reason": "Invalid ATR/price",
-            "quantity": 0,
-        }
-
-    # Stop loss berbasis ATR
-    stop_distance = atr * 1.5
-
-    if stop_distance <= 0:
-        return {
-            "approved": False,
-            "reason": "Stop distance is zero (No volatility)",
-            "quantity": 0,
-        }
-
-    risk_amount = (
-        capital * risk_per_trade
-    )
-
-    quantity = int(
-        risk_amount / stop_distance
-    )
-
-    # Saham Indonesia diperdagangkan dalam lot
-    lots = quantity // 100
+    stop_dist   = atr * 1.5
+    risk_amount = capital * risk_per_trade
+    lots        = max(0, int(risk_amount / stop_dist) // 100)
 
     if lots <= 0:
+        return {"approved": False, "reason": "Position too small", "lots": 0}
 
-        return {
-            "approved": False,
-            "reason": "Position too small",
-            "quantity": 0,
-        }
-
-    shares = lots * 100
-
-    estimated_value = shares * price
-
-    if estimated_value > capital:
-
-        return {
-            "approved": False,
-            "reason": "Insufficient capital",
-            "quantity": 0,
-        }
-
-    stop_loss = price - stop_distance
-
-    take_profit = price + (
-        stop_distance * 2
-    )
+    stop_loss   = price - stop_dist
+    take_profit = price + stop_dist * 2
+    rr          = round((take_profit - price) / (price - stop_loss), 2) if (price - stop_loss) > 0 else 0
 
     return {
-        "approved": True,
-        "reason": "Risk approved",
-        "quantity": shares,
-        "lots": lots,
-        "entry": price,
-        "stop_loss": stop_loss,
+        "approved":    True,
+        "reason":      f"R:R {rr:.1f}x",
+        "lots":        lots,
+        "entry":       price,
+        "stop_loss":   stop_loss,
         "take_profit": take_profit,
-        "estimated_value": estimated_value,
+        "rr":          rr,
+        "quantity":    lots * 100,
+    }
+
+
+def make_decision(df, capital=INITIAL_CAPITAL, risk_per_trade=0.01):
+    """
+    Unified Decision Pipeline — SINGLE SOURCE OF TRUTH.
+
+    Flow:
+      signal_engine() → score → hard filters → position sizing → decision
+
+    Returns a unified dict:
+      state          : AVOID / WAIT / SETUP / BUY
+      signal_label   : emoji + label string
+      approved       : bool (True only for BUY)
+      total_score    : 0-100
+      score_breakdown: dict of component scores
+      hard_filters   : list of {name, pass, reason}
+      regime         : BULL / SIDEWAYS / BEAR
+      strategy       : dominant strategy name
+      reasons_pass   : list of conditions met
+      reasons_fail   : list of conditions not met
+      why_not        : human-readable explanation of blockers
+      entry / stop_loss / take_profit / lots / rr
+      support / resistance
+    """
+    # ── Step 1: Run signal engine ──────────────────────────
+    sig = signal_engine(df)
+    score    = sig.get("total_score", 0)
+    regime   = sig.get("regime", "UNKNOWN")
+    strategy = sig.get("strategy", "—")
+    bd       = sig.get("score_breakdown", {})
+    support  = sig.get("support", 0)
+    resistance = sig.get("resistance", 0)
+
+    latest = df.iloc[-1]
+    price  = float(latest["close"])
+    atr    = float(latest.get("atr", 0)) if not pd.isna(latest.get("atr", float('nan'))) else 0
+    rsi2   = float(latest.get("rsi_2", 50)) if not pd.isna(latest.get("rsi_2", float('nan'))) else 50
+    ma200  = float(latest.get("ma200", 0)) if "ma200" in latest.index and not pd.isna(latest["ma200"]) else 0
+    vol_r  = float(latest.get("volume_ratio", 1.0)) if "volume_ratio" in latest.index else 1.0
+
+    # ── Step 2: Position sizing ────────────────────────────
+    stop_dist   = atr * 1.5 if atr > 0 else price * 0.03
+    risk_amount = capital * risk_per_trade
+    lots        = max(0, int(risk_amount / stop_dist) // 100) if stop_dist > 0 else 0
+    stop_loss   = price - stop_dist
+    take_profit = price + stop_dist * 2.0
+    rr          = round((take_profit - price) / max(price - stop_loss, 1), 2)
+
+    # ── Step 3: Hard filters (must ALL pass for BUY) ───────
+    import sqlite3, os
+    open_pos, invested = 0, 0.0
+    try:
+        if os.path.exists('data/paper.db'):
+            with sqlite3.connect('data/paper.db') as conn:
+                rows = conn.execute("SELECT cost FROM positions").fetchall()
+                open_pos  = len(rows)
+                invested  = sum(float(r[0]) for r in rows if r[0])
+    except:
+        pass
+
+    hard_filters = [
+        {
+            "name":   "Market Regime ≠ BEAR",
+            "pass":   regime in ("BULL", "SIDEWAYS"),
+            "reason": f"Regime = {regime}"
+        },
+        {
+            "name":   "Signal Score ≥ 80",
+            "pass":   score >= 80,
+            "reason": f"Score = {score}/100"
+        },
+        {
+            "name":   "Max Positions (5)",
+            "pass":   open_pos < 5,
+            "reason": f"Open = {open_pos}/5"
+        },
+        {
+            "name":   "Max Exposure (60%)",
+            "pass":   invested < capital * 0.6,
+            "reason": f"Invested = {invested/capital*100:.0f}%"
+        },
+        {
+            "name":   "Liquidity OK",
+            "pass":   float(latest["close"]) * float(latest["volume"]) >= MIN_AVG_VALUE,
+            "reason": "Traded value below threshold"
+        },
+        {
+            "name":   "ATR Valid",
+            "pass":   atr > 0 and lots > 0,
+            "reason": "Cannot size position"
+        },
+        {
+            "name":   "R:R ≥ 1.5x",
+            "pass":   rr >= 1.5,
+            "reason": f"R:R = {rr:.1f}x"
+        },
+    ]
+
+    all_pass    = all(f["pass"] for f in hard_filters)
+    fails       = [f for f in hard_filters if not f["pass"]]
+    passes      = [f for f in hard_filters if f["pass"]]
+
+    # Why conditions
+    reasons_pass = []
+    reasons_fail = []
+
+    indicator_checks = [
+        ("RSI(2) oversold",    rsi2 < 10),
+        ("Price > MA200",      price > ma200 > 0),
+        ("Volume confirmed",   vol_r > 1.2),
+        ("Near support",       support > 0 and abs(price - support) / price < 0.03),
+        ("Regime bullish",     regime == "BULL"),
+        ("Score ≥ 80",         score >= 80),
+        ("Positions < 5",      open_pos < 5),
+        ("R:R ≥ 1.5x",         rr >= 1.5),
+    ]
+    for label, cond in indicator_checks:
+        if cond:
+            reasons_pass.append(label)
+        else:
+            reasons_fail.append(label)
+
+    # ── Step 4: Determine final state ──────────────────────
+    if not all_pass:
+        # Which blocker is most important?
+        blocker = fails[0]["reason"] if fails else "Multiple filters failed"
+        if score < 40:
+            state = "AVOID"
+            label = SIGNAL_AVOID
+        else:
+            state = "WAIT"
+            label = SIGNAL_WAIT
+        why_not = f"Blocked by: {', '.join(f['reason'] for f in fails[:3])}"
+        approved = False
+    elif score >= 80:
+        state    = "BUY"
+        label    = SIGNAL_BUY
+        why_not  = ""
+        approved = True
+    elif score >= 65:
+        state    = "SETUP"
+        label    = SIGNAL_SETUP
+        why_not  = f"Score {score}/100 — needs 80+ for entry"
+        approved = False
+    else:
+        state    = "WAIT"
+        label    = SIGNAL_WAIT
+        why_not  = f"Score {score}/100 — needs 80+ for entry"
+        approved = False
+
+    return {
+        # Decision
+        "state":         state,
+        "signal_label":  label,
+        "approved":      approved,
+        # Scores
+        "total_score":      score,
+        "score_breakdown":  bd,
+        # Context
+        "regime":        regime,
+        "strategy":      strategy,
+        "support":       support,
+        "resistance":    resistance,
+        # Filters
+        "hard_filters":  hard_filters,
+        "reasons_pass":  reasons_pass,
+        "reasons_fail":  reasons_fail,
+        "why_not":       why_not,
+        # Trade plan
+        "entry":         price,
+        "stop_loss":     stop_loss,
+        "take_profit":   take_profit,
+        "lots":          lots,
+        "rr":            rr,
     }
 
 
