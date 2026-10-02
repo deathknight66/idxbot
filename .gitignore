@@ -11,3 +11,6 @@ venv/
 dist/
 build/
 .pytest_cache/
+.streamlit/secrets.toml
+secrets.toml
+*.log
