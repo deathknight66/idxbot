@@ -92,34 +92,39 @@ div.pos-card {
 }
 
 /* ── Sleek TradingView Watchlist Styling in Left Column ── */
+[data-testid="column"]:first-child div[data-testid="stButton"],
 div[data-testid="stColumn"]:first-child div[data-testid="stButton"] {
     margin-bottom: 2px !important;
 }
+[data-testid="column"]:first-child div[data-testid="stButton"] > button,
 div[data-testid="stColumn"]:first-child div[data-testid="stButton"] > button {
-    background: #181c27 !important;
-    border: 1px solid #232735 !important;
+    background: #151924 !important;
+    border: 1px solid #1E2433 !important;
     border-left: 3px solid transparent !important;
     border-radius: 4px !important;
-    padding: 6px 10px !important;
-    height: 34px !important;
-    min-height: 34px !important;
+    padding: 6px 12px !important;
+    height: 36px !important;
+    min-height: 36px !important;
     width: 100% !important;
     box-shadow: none !important;
     transition: all 0.15s ease !important;
 }
+[data-testid="column"]:first-child div[data-testid="stButton"] > button:hover,
 div[data-testid="stColumn"]:first-child div[data-testid="stButton"] > button:hover {
-    background: #1e283d !important;
+    background: #1c2436 !important;
     border-color: #2962FF !important;
     border-left: 3px solid #2962FF !important;
 }
+[data-testid="column"]:first-child div[data-testid="stButton"] > button[kind="primary"],
 div[data-testid="stColumn"]:first-child div[data-testid="stButton"] > button[kind="primary"] {
-    background: #1a3456 !important;
+    background: #182844 !important;
     border: 1px solid #2962FF !important;
-    border-left: 3px solid #00E676 !important;
+    border-left: 4px solid #00E676 !important;
 }
+[data-testid="column"]:first-child div[data-testid="stButton"] > button p,
 div[data-testid="stColumn"]:first-child div[data-testid="stButton"] > button p {
     font-family: 'JetBrains Mono', 'Roboto Mono', monospace, sans-serif !important;
-    font-size: 11px !important;
+    font-size: 11.5px !important;
     font-weight: 600 !important;
     color: #D1D4DC !important;
     width: 100% !important;
@@ -128,6 +133,7 @@ div[data-testid="stColumn"]:first-child div[data-testid="stButton"] > button p {
     align-items: center !important;
     margin: 0 !important;
 }
+[data-testid="column"]:first-child div[data-testid="stButton"] > button[kind="primary"] p,
 div[data-testid="stColumn"]:first-child div[data-testid="stButton"] > button[kind="primary"] p {
     color: #FFFFFF !important;
     font-weight: 700 !important;
@@ -374,45 +380,47 @@ pos_pnl_color = "#26a69a" if pnl_pos >= 0 else "#ef5350"
 pos_pnl_str   = f"+Rp{pnl_pos:,.0f}" if pnl_pos >= 0 else f"-Rp{abs(pnl_pos):,.0f}"
 
 # ── TOP BAR: Logo Left | Big Centered Cards | Actions Right ──
-col_brand, col_metrics, col_actions = st.columns([1.6, 5.2, 1.2])
+col_brand, col_metrics, col_actions = st.columns([1.3, 5.7, 1.2])
 
 with col_brand:
     st.markdown("""
-<div style="padding: 4px 0;">
+<div style="padding: 6px 0;">
   <div style="display:flex; align-items:center; gap:8px;">
-    <span style="font-size:20px; font-weight:800; color:#FFFFFF; letter-spacing:-0.5px;">📈 IDXBot</span>
-    <span style="font-size:10px; font-weight:700; color:#26a69a; background:rgba(38,166,154,0.15); border:1px solid #26a69a; padding:2px 6px; border-radius:4px;">● PAPER</span>
+    <span style="font-size:22px; font-weight:800; color:#FFFFFF; letter-spacing:-0.5px;">📈 IDXBot</span>
+    <span style="font-size:10px; font-weight:700; color:#00E676; background:rgba(0,230,118,0.12); border:1px solid #00E676; padding:2px 6px; border-radius:4px;">● PAPER</span>
   </div>
-  <div style="font-size:10px; color:#787b86; margin-top:2px;">Trading Terminal</div>
+  <div style="font-size:11px; color:#8F96A8; margin-top:2px;">Trading Terminal</div>
 </div>""", unsafe_allow_html=True)
 
 with col_metrics:
     st.markdown(f"""
-<div style="display:flex; justify-content:center; align-items:stretch; gap:10px; padding:2px 0;">
-  <div style="background:#181c27; border:1px solid #2A2E39; border-radius:6px; padding:6px 14px; text-align:center; min-width:85px;">
-    <div style="font-size:9px; font-weight:700; color:#787b86; letter-spacing:0.5px;">TOTAL EQUITY</div>
-    <div style="font-size:16px; font-weight:800; color:#FFFFFF; margin-top:1px;">Rp{equity/1e6:.1f}M</div>
+<div style="display:flex; justify-content:center; align-items:stretch; gap:12px; padding:2px 0;">
+  <div style="background:#151924; border:1px solid #2B3346; border-radius:8px; padding:8px 18px; text-align:center; min-width:105px; box-shadow:0 2px 8px rgba(0,0,0,0.25);">
+    <div style="font-size:10px; font-weight:800; color:#8F96A8; letter-spacing:0.8px; text-transform:uppercase;">TOTAL EQUITY</div>
+    <div style="font-size:19px; font-weight:900; color:#FFFFFF; margin-top:2px;">Rp{equity/1e6:.1f}M</div>
   </div>
-  <div style="background:#181c27; border:1px solid #2A2E39; border-radius:6px; padding:6px 14px; text-align:center; min-width:85px;">
-    <div style="font-size:9px; font-weight:700; color:#787b86; letter-spacing:0.5px;">CASH AVAILABLE</div>
-    <div style="font-size:16px; font-weight:800; color:#D1D4DC; margin-top:1px;">Rp{cash/1e6:.1f}M</div>
+  <div style="background:#151924; border:1px solid #2B3346; border-radius:8px; padding:8px 18px; text-align:center; min-width:105px; box-shadow:0 2px 8px rgba(0,0,0,0.25);">
+    <div style="font-size:10px; font-weight:800; color:#8F96A8; letter-spacing:0.8px; text-transform:uppercase;">CASH AVAILABLE</div>
+    <div style="font-size:19px; font-weight:900; color:#E1E4EA; margin-top:2px;">Rp{cash/1e6:.1f}M</div>
   </div>
-  <div style="background:#181c27; border:1px solid #2A2E39; border-radius:6px; padding:6px 14px; text-align:center; min-width:85px;">
-    <div style="font-size:9px; font-weight:700; color:#787b86; letter-spacing:0.5px;">INVESTED</div>
-    <div style="font-size:16px; font-weight:800; color:#D1D4DC; margin-top:1px;">Rp{invested/1e6:.1f}M</div>
+  <div style="background:#151924; border:1px solid #2B3346; border-radius:8px; padding:8px 18px; text-align:center; min-width:105px; box-shadow:0 2px 8px rgba(0,0,0,0.25);">
+    <div style="font-size:10px; font-weight:800; color:#8F96A8; letter-spacing:0.8px; text-transform:uppercase;">INVESTED</div>
+    <div style="font-size:19px; font-weight:900; color:#E1E4EA; margin-top:2px;">Rp{invested/1e6:.1f}M</div>
   </div>
-  <div style="background:#181c27; border:1px solid #2A2E39; border-radius:6px; padding:6px 12px; text-align:center; min-width:65px;">
-    <div style="font-size:9px; font-weight:700; color:#787b86; letter-spacing:0.5px;">POSITIONS</div>
-    <div style="font-size:16px; font-weight:800; color:#2962FF; margin-top:1px;">{len(positions)}/5</div>
+  <div style="background:#151924; border:1px solid #2B3346; border-radius:8px; padding:8px 16px; text-align:center; min-width:75px; box-shadow:0 2px 8px rgba(0,0,0,0.25);">
+    <div style="font-size:10px; font-weight:800; color:#8F96A8; letter-spacing:0.8px; text-transform:uppercase;">POSITIONS</div>
+    <div style="font-size:19px; font-weight:900; color:#2962FF; margin-top:2px;">{len(positions)} / 5</div>
   </div>
-  <div style="background:#181c27; border:1px solid {'#26a69a' if total_pnl>=0 else '#ef5350'}; border-radius:6px; padding:6px 14px; text-align:center; min-width:130px;">
-    <div style="font-size:9px; font-weight:700; color:#787b86; letter-spacing:0.5px;">TOTAL UNTUNG / RUGI</div>
-    <div style="font-size:16px; font-weight:800; color:{total_pnl_color}; margin-top:1px;">{total_pnl_str} <span style="font-size:11px;">({total_pnl_pct:+.2f}%)</span></div>
+  <div style="background:#151924; border:1px solid {'#00E676' if total_pnl>=0 else '#FF5252'}; border-radius:8px; padding:8px 18px; text-align:center; min-width:145px; box-shadow:0 2px 8px rgba(0,0,0,0.25);">
+    <div style="font-size:10px; font-weight:800; color:#8F96A8; letter-spacing:0.8px; text-transform:uppercase;">TOTAL UNTUNG / RUGI</div>
+    <div style="font-size:19px; font-weight:900; color:{'#00E676' if total_pnl>=0 else '#FF5252'}; margin-top:2px;">
+      {total_pnl_str} <span style="font-size:12px; font-weight:700;">({total_pnl_pct:+.2f}%)</span>
+    </div>
   </div>
 </div>""", unsafe_allow_html=True)
 
 with col_actions:
-    st.markdown("<div style='height:4px;'></div>", unsafe_allow_html=True)
+    st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
     c_time, c_exit = st.columns([1.2, 1])
     with c_time:
         period_opts = {"1m":"1mo","3m":"3mo","6m":"6mo","1y":"1y","3y":"3y"}
@@ -424,6 +432,7 @@ with col_actions:
         if st.button("🚪 Exit", use_container_width=True, key="top_exit"):
             st.session_state["logged_in"] = False
             st.rerun()
+
 
 # Flash messages
 if "flash" in st.session_state:
@@ -442,13 +451,14 @@ left, center, right = st.columns([1.1, 3.9, 1.4], gap="small")
 # ══════════════════════════
 with left:
     st.markdown(
-        "<div style='padding:4px 6px 6px; font-size:11px; color:#787b86; font-weight:800; "
-        "letter-spacing:1px; border-bottom:1px solid #2A2E39; display:flex; justify-content:space-between;'>"
-        "<span>WATCHLIST</span>"
-        f"<span style='color:#2962FF; font-weight:700;'>{len(WATCHLIST)} STOCKS</span>"
+        "<div style='padding:10px 8px 8px; font-size:12px; color:#8F96A8; font-weight:800; "
+        "letter-spacing:1px; border-bottom:1px solid #2B3346; display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;'>"
+        "<span>📊 WATCHLIST</span>"
+        f"<span style='color:#2962FF; font-size:10px; font-weight:700;'>{len(WATCHLIST)} PAIRS</span>"
         "</div>",
         unsafe_allow_html=True
     )
+
 
     for sym in WATCHLIST:
         px, pct = load_price(sym + ".JK")
