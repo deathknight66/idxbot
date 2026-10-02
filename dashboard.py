@@ -14,6 +14,12 @@ from engine import (
     risk_check, INITIAL_CAPITAL, UNIVERSE
 )
 
+try:
+    import anthropic
+    CLAUDE_AVAILABLE = True
+except ImportError:
+    CLAUDE_AVAILABLE = False
+
 # ─────────────────────────────────────────
 # PAGE CONFIG (must be first)
 # ─────────────────────────────────────────
@@ -653,54 +659,162 @@ with right:
 </div>""", unsafe_allow_html=True)
     
     st.markdown("<hr style='border-color:#2A2E39;margin:8px 0'>", unsafe_allow_html=True)
-    
-    # ── AI CHATBOT ──
-    st.markdown("<div style='font-size:12px;font-weight:700;margin-bottom:4px'>🤖 AI Assistant</div>",
+
+    # ── CLAUDE AI ASSISTANT ──────────────────────────────
+    claude_icon = "🤖 Claude" if CLAUDE_AVAILABLE else "🤖 Assistant"
+    st.markdown(f"<div style='font-size:12px;font-weight:700;margin-bottom:4px'>{claude_icon}</div>",
                 unsafe_allow_html=True)
-    
-    chat_inp = st.text_input("", placeholder="Tanya: 'Kenapa BBCA BUY?'",
+
+    # Check API key from Streamlit secrets
+    api_key = st.secrets.get("ANTHROPIC_API_KEY", "") if hasattr(st, "secrets") else ""
+    claude_ready = CLAUDE_AVAILABLE and bool(api_key)
+
+    if not claude_ready:
+        st.markdown(
+            "<div style='font-size:10px;color:#787b86;background:#1E222D;"
+            "padding:6px;border-radius:4px;border:1px solid #2A2E39'>"
+            "⚙️ Tambahkan <b>ANTHROPIC_API_KEY</b> di Streamlit Secrets untuk aktifkan Claude AI."
+            "</div>", unsafe_allow_html=True
+        )
+
+    chat_inp = st.text_input("", placeholder="Tanya Claude: 'Kenapa BBCA WAIT?' atau 'Analisis BMRI'",
                              label_visibility="collapsed", key="chat_inp")
+
     if chat_inp:
-        q = chat_inp.lower()
+        # Build context: gather real engine data to send to Claude
+        ctx_lines = []
         try:
-            if any(s in chat_inp.upper() for s in WATCHLIST):
-                ask_sym = next(s for s in WATCHLIST if s in chat_inp.upper())
-                df_ask  = load_chart(ask_sym + ".JK", "3mo")
-                r_ask   = risk_check(df_ask, capital=equity)
-                rsi_v   = float(df_ask['rsi_2'].iloc[-1]) if 'rsi_2' in df_ask.columns else 0
-                vr_v    = float(df_ask['volume_ratio'].iloc[-1]) if 'volume_ratio' in df_ask.columns else 1.0
-                reply   = (f"**{ask_sym}** — {'🟢 SINYAL BUY' if r_ask.get('approved') else '🔴 WAIT'}\n"
-                           f"RSI(2): {rsi_v:.1f} | Volume: {vr_v:.1f}x\n"
-                           f"Entry: Rp{r_ask.get('entry',0):,.0f} | "
-                           f"SL: Rp{r_ask.get('stop_loss',0):,.0f} | "
-                           f"TP: Rp{r_ask.get('take_profit',0):,.0f}\n"
-                           f"{r_ask.get('reason','')}")
-            elif "posisi" in q or "portfolio" in q:
-                if positions.empty:
-                    reply = f"Tidak ada posisi. Kas: Rp{cash:,.0f}"
-                else:
-                    lines = [f"{r['symbol']}: {int(r['shares'])//100} lot @ Rp{r['entry']:,.0f}"
-                             for _, r in positions.iterrows()]
-                    reply = "Posisi aktif:\n" + "\n".join(lines)
-            elif "scan" in q or "sinyal" in q:
-                buys = [s for s in WATCHLIST[:8]
-                        if risk_check(load_chart(s+".JK","3mo"), capital=equity).get('approved')]
-                reply = f"Sinyal BUY: {', '.join(buys) if buys else 'Tidak ada saat ini'}"
-            else:
-                reply = ("Saya bisa menjawab:\n"
-                         "• 'Kenapa BBCA dapat BUY?'\n"
-                         "• 'Cek posisi saya'\n"
-                         "• 'Ada sinyal apa hari ini?'")
-        except Exception as e:
-            reply = f"Error: {e}"
-        
+            # Current symbol analysis
+            sig_ctx  = signal_engine(df) if data_ok else {}
+            risk_ctx = risk_check(df, capital=equity) if data_ok else {}
+            rsi_ctx  = float(df['rsi_2'].iloc[-1]) if data_ok and 'rsi_2' in df.columns else 0
+            vr_ctx   = float(df['volume_ratio'].iloc[-1]) if data_ok and 'volume_ratio' in df.columns else 1.0
+            ma200_ctx = float(df['ma200'].iloc[-1]) if data_ok and 'ma200' in df.columns else 0
+
+            ctx_lines = [
+                f"=== IDXBot Market Context ===",
+                f"Symbol yang sedang dilihat: {selected} ({symbol})",
+                f"Harga terakhir: Rp{last_price:,.0f} ({chg_pct:+.2f}%)",
+                f"",
+                f"--- Signal Engine Output ---",
+                f"Signal: {sig_ctx.get('signal','?')}",
+                f"Total Score: {sig_ctx.get('total_score',0)}/100",
+                f"Dominant Strategy: {sig_ctx.get('strategy','?')}",
+                f"Market Regime: {sig_ctx.get('regime','?')}",
+                f"Score Breakdown: {sig_ctx.get('score_breakdown',{})}",
+                f"Reason: {sig_ctx.get('reason','?')}",
+                f"",
+                f"--- Technical Indicators ---",
+                f"RSI(2): {rsi_ctx:.1f} {'(Oversold)' if rsi_ctx < 5 else '(Normal)' if rsi_ctx < 70 else '(Overbought)'}",
+                f"Volume Ratio: {vr_ctx:.2f}x average",
+                f"Price vs MA200: {'ABOVE' if last_price > ma200_ctx > 0 else 'BELOW'} (MA200={ma200_ctx:,.0f})",
+                f"Support: Rp{sig_ctx.get('support', 0):,.0f}",
+                f"Resistance: Rp{sig_ctx.get('resistance', 0):,.0f}",
+                f"",
+                f"--- Risk Engine Output ---",
+                f"Approved: {risk_ctx.get('approved', False)}",
+                f"Lots: {risk_ctx.get('lots', 0)} lot",
+                f"Entry: Rp{risk_ctx.get('entry', last_price):,.0f}",
+                f"Stop Loss: Rp{risk_ctx.get('stop_loss', 0):,.0f}",
+                f"Take Profit: Rp{risk_ctx.get('take_profit', 0):,.0f}",
+                f"Risk Reason: {risk_ctx.get('reason', '')}",
+                f"",
+                f"--- Portfolio State ---",
+                f"Total Equity: Rp{equity:,.0f}",
+                f"Cash: Rp{cash:,.0f}",
+                f"Open Positions: {len(positions)}/5",
+            ]
+            if not positions.empty:
+                ctx_lines.append("Posisi aktif:")
+                for _, pr in positions.iterrows():
+                    ctx_lines.append(f"  - {pr['symbol']}: {int(pr.get('shares',0))//100} lot @ Rp{float(pr.get('entry',0)):,.0f}")
+        except Exception as ctx_e:
+            ctx_lines = [f"Context error: {ctx_e}"]
+
+        context_str = "\n".join(ctx_lines)
+
+        SYSTEM_PROMPT = """Kamu adalah IDXBot AI Assistant — intelligence layer dari sistem trading bot IDX (Indonesia Stock Exchange).
+
+Peranmu: Menganalisis dan menjelaskan keputusan bot secara transparan kepada trader. 
+BUKAN untuk mengeksekusi order secara langsung.
+
+Prinsip utama:
+- Jelaskan KENAPA bot memberikan sinyal tertentu berdasarkan data yang diberikan
+- Gunakan bahasa Indonesia yang jelas dan ringkas
+- Fokus pada expectancy, risk/reward, dan edge — BUKAN win rate semata
+- Jika ada setup yang menarik, jelaskan trade plan-nya (entry, SL, TP, lot)
+- Ingatkan bahwa keputusan akhir tetap di tangan trader
+- Jangan pernah claim "pasti profit" atau memberikan jaminan apapun
+- Maksimal 150 kata per jawaban agar tidak membebani layar
+
+Format jawaban: ringkas, bullet point jika perlu, langsung ke inti."""
+
+        if claude_ready:
+            try:
+                client = anthropic.Anthropic(api_key=api_key)
+                # Build message history (last 5 exchanges)
+                history = []
+                for role, msg in st.session_state["chat"][-8:]:
+                    history.append({
+                        "role": "user" if role == "u" else "assistant",
+                        "content": msg
+                    })
+                history.append({
+                    "role": "user",
+                    "content": f"Data konteks dari bot:\n{context_str}\n\n---\nPertanyaan: {chat_inp}"
+                })
+
+                with st.spinner("Claude sedang menganalisis..."):
+                    response = client.messages.create(
+                        model="claude-opus-4-5",
+                        max_tokens=400,
+                        system=SYSTEM_PROMPT,
+                        messages=history
+                    )
+                reply = response.content[0].text
+
+            except Exception as claude_e:
+                reply = f"Claude error: {claude_e}"
+        else:
+            # Fallback rule-based when no API key
+            q = chat_inp.lower()
+            try:
+                sig_fb  = signal_engine(df) if data_ok else {}
+                risk_fb = risk_check(df, capital=equity) if data_ok else {}
+                rsi_fb  = float(df['rsi_2'].iloc[-1]) if data_ok and 'rsi_2' in df.columns else 0
+                vr_fb   = float(df['volume_ratio'].iloc[-1]) if data_ok and 'volume_ratio' in df.columns else 1.0
+                approved_fb = risk_fb.get('approved', False)
+                signal_label = sig_fb.get('signal', 'WAIT')
+                score_fb = sig_fb.get('total_score', 0)
+                regime_fb = sig_fb.get('regime', '?')
+                strategy_fb = sig_fb.get('strategy', '?')
+
+                reply = (
+                    f"**{selected}** — {signal_label} (Score: {score_fb}/100)\n\n"
+                    f"📊 Regime: **{regime_fb}** | Strategi: {strategy_fb}\n"
+                    f"RSI(2): {rsi_fb:.1f} | Volume: {vr_fb:.1f}x\n"
+                    f"Entry: Rp{risk_fb.get('entry', last_price):,.0f} | "
+                    f"SL: Rp{risk_fb.get('stop_loss', 0):,.0f} | "
+                    f"TP: Rp{risk_fb.get('take_profit', 0):,.0f}\n\n"
+                    f"{'✅ ' + risk_fb.get('reason','') if approved_fb else '⏸ ' + risk_fb.get('reason','')}\n\n"
+                    f"_Tambahkan ANTHROPIC_API_KEY di Secrets untuk jawaban lebih detail dari Claude._"
+                )
+            except Exception as fb_e:
+                reply = f"Error: {fb_e}"
+
         st.session_state["chat"].append(("u", chat_inp))
         st.session_state["chat"].append(("b", reply))
-    
-    for role, msg in st.session_state["chat"][-6:]:
-        cls = "chat-u" if role == "u" else "chat-b"
+
+    # Display chat history
+    for role, msg in st.session_state["chat"][-8:]:
+        cls  = "chat-u" if role == "u" else "chat-b"
         icon = "👤" if role == "u" else "🤖"
         st.markdown(f'<div class="{cls}">{icon} {msg}</div>', unsafe_allow_html=True)
+
+    if st.session_state["chat"] and st.button("🗑 Clear chat", key="clear_chat", use_container_width=True):
+        st.session_state["chat"] = []
+        st.rerun()
+
 
 # ─────────────────────────────────────────
 # BOTTOM TABS — Positions | Orders | Signals | Health
