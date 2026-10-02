@@ -40,8 +40,8 @@ st.markdown("""
 /* Base */
 .stApp { background:#131722 !important; color:#D1D4DC !important; }
 section[data-testid="stSidebar"] { background:#1E222D !important; }
-.block-container { padding:0 !important; max-width:100% !important; }
-div[data-testid="stVerticalBlock"] { gap:0 !important; }
+.block-container { padding: 12px 18px 24px 18px !important; max-width: 100% !important; }
+div[data-testid="stVerticalBlock"] { gap: 0.35rem !important; }
 
 /* Hide default decorations */
 #MainMenu, footer, header { visibility:hidden; }
@@ -302,8 +302,33 @@ def load_chart(symbol, period="1y"):
     return calculate_indicators(df)
 
 @st.cache_data(ttl=60)
+def load_all_prices():
+    """Batch fetch latest prices and 1-day change for UNIVERSE stocks in 1 fast query."""
+    prices = {}
+    try:
+        import yfinance as yf
+        df = yf.download(UNIVERSE, period="5d", progress=False)
+        if not df.empty and 'Close' in df:
+            closes = df['Close']
+            for s in UNIVERSE:
+                sym_clean = s.replace(".JK", "")
+                if s in closes.columns:
+                    series = closes[s].dropna()
+                    if len(series) >= 2:
+                        last = float(series.iloc[-1])
+                        prev = float(series.iloc[-2])
+                        pct = (last - prev) / prev * 100
+                        prices[sym_clean] = (last, pct)
+    except Exception:
+        pass
+    return prices
+
 def load_price(symbol):
-    """Return (last_price, change_pct) quickly via recent data."""
+    """Return (last_price, change_pct) quickly via cached batch prices or fallback."""
+    clean = symbol.replace(".JK", "")
+    all_px = load_all_prices()
+    if clean in all_px:
+        return all_px[clean]
     try:
         df = get_market_data(symbol, period="5d")
         last  = float(df['close'].iloc[-1])
@@ -313,20 +338,25 @@ def load_price(symbol):
         return 0.0, 0.0
 
 # ─────────────────────────────────────────
-# SESSION STATE
-# ─────────────────────────────────────────
-# ─────────────────────────────────────────
-# SCANNER CACHE
+# SCANNER CACHE (Multi-threaded & Cached)
 # ─────────────────────────────────────────
 @st.cache_data(ttl=90)
-def scan_all_watchlist():
+def scan_symbols(symbols_tuple):
+    from concurrent.futures import ThreadPoolExecutor
     counts = {"BUY": 0, "SETUP": 0, "WATCH": 0, "AVOID": 0}
     symbol_states = {}
-    for s in WATCHLIST:
+
+    def _eval_sym(s):
         try:
             df_item = load_chart(s + ".JK", "3mo")
             dec_item = make_decision(df_item, capital=100_000_000)
-            st_val = dec_item.get("state", "AVOID")
+            return s, dec_item.get("state", "AVOID")
+        except Exception:
+            return s, "AVOID"
+
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        results = ex.map(_eval_sym, symbols_tuple)
+        for s, st_val in results:
             if st_val == "BUY":
                 counts["BUY"] += 1
                 symbol_states[s] = "BUY ●"
@@ -339,16 +369,25 @@ def scan_all_watchlist():
             else:
                 counts["AVOID"] += 1
                 symbol_states[s] = "AVOID ●"
-        except Exception:
-            counts["AVOID"] += 1
-            symbol_states[s] = "— ●"
     return counts, symbol_states
 
+def scan_all_watchlist():
+    return scan_symbols(tuple(ALL_STOCKS))
 
 # ─────────────────────────────────────────
-# SESSION STATE
+# SESSION STATE & 45-STOCK UNIVERSE
 # ─────────────────────────────────────────
-WATCHLIST = [s.replace(".JK","") for s in UNIVERSE[:15]]
+ALL_STOCKS = [s.replace(".JK", "") for s in UNIVERSE]
+SECTOR_MAP = {
+    "⭐ Semua (45)": ALL_STOCKS,
+    "🏦 Banking (6)": ["BBCA", "BBRI", "BMRI", "BBNI", "BRIS", "ARTO"],
+    "⛏️ Energy & Mining (9)": ["ADRO", "PTBA", "ITMG", "UNTR", "PGAS", "MEDC", "AKRA", "HRUM", "INDY"],
+    "🧪 Basic Materials (7)": ["ANTM", "MDKA", "INCO", "TINS", "BRPT", "TPIA", "AMMN"],
+    "🛒 Consumer (7)": ["ICBP", "INDF", "UNVR", "MYOR", "KLBF", "AMRT", "CPIN"],
+    "📱 Telco & Tech (5)": ["TLKM", "ISAT", "EXCL", "GOTO", "BUKA"],
+    "🏗️ Infra & Property (11)": ["JSMR", "PTPP", "ADHI", "WIKA", "WSKT", "ASII", "CTRA", "BSDE", "SMRA", "PWON", "SMGR", "INTP"]
+}
+WATCHLIST = ALL_STOCKS
 if "sym" not in st.session_state:
     st.session_state["sym"] = "BBCA"
 if "period" not in st.session_state:
@@ -509,7 +548,7 @@ if "flash" in st.session_state:
     msg = st.session_state.pop("flash")
     (st.success if msg.startswith("✅") else st.error)(msg)
 
-st.markdown("<hr style='margin:6px 0; border-color:#2A2E39'>", unsafe_allow_html=True)
+st.markdown("<div style='height: 10px; clear: both;'></div><hr style='margin: 4px 0 14px 0; border: none; border-bottom: 1px solid #2B3346;'><div style='height: 4px;'></div>", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────
 # MAIN LAYOUT: LEFT | CENTER | RIGHT
@@ -520,21 +559,26 @@ left, center, right = st.columns([1.15, 3.85, 1.4], gap="small")
 # LEFT — Watchlist + Bot Scan
 # ══════════════════════════
 with left:
-    st.markdown(
-        "<div style='padding:8px 8px 6px; font-size:11px; color:#8F96A8; font-weight:800; "
-        "letter-spacing:1px; border-bottom:1px solid #2B3346; display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;'>"
-        "<span>📊 WATCHLIST</span>"
-        f"<span style='color:#2962FF; font-size:10px; font-weight:700;'>{len(WATCHLIST)} PAIRS</span>"
-        "</div>",
-        unsafe_allow_html=True
-    )
+    c_sec1, c_sec2 = st.columns([1.1, 1.4])
+    with c_sec1:
+        st.markdown("<div style='font-size:11px;font-weight:800;color:#8F96A8;padding-top:6px;letter-spacing:0.5px;'>📊 WATCHLIST</div>", unsafe_allow_html=True)
+    with c_sec2:
+        sec_choice = st.selectbox(
+            "Sektor",
+            list(SECTOR_MAP.keys()),
+            index=0,
+            label_visibility="collapsed",
+            key="wl_sector_sel"
+        )
 
-    # Scanner summary cache
-    scan_counts, scan_sym_states = scan_all_watchlist()
+    current_watchlist = SECTOR_MAP.get(sec_choice, ALL_STOCKS)
+
+    # Scanner summary cache for currently selected symbols
+    scan_counts, scan_sym_states = scan_symbols(tuple(current_watchlist))
 
     # 1. SCROLLABLE WATCHLIST CONTAINER (Never pushes Bot Scan off screen)
     with st.container(height=450):
-        for sym in WATCHLIST:
+        for sym in current_watchlist:
             px, pct = load_price(sym + ".JK")
             is_active = (sym == selected)
 
@@ -566,8 +610,9 @@ with left:
     # 2. FIXED / DOCKED BOT SCANNER (Always visible directly below watchlist)
     st.markdown(f"""
 <div style="background:#151924; border:1px solid #2B3346; border-radius:8px; padding:10px 12px; margin-top:8px;">
-  <div style="font-size:10px; font-weight:800; color:#8F96A8; letter-spacing:1px; margin-bottom:8px;">
-    🤖 BOT SCANNER
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+    <span style="font-size:10px; font-weight:800; color:#8F96A8; letter-spacing:1px;">🤖 BOT SCANNER</span>
+    <span style="font-size:9px; color:#2962FF; font-weight:700;">{len(current_watchlist)} STOCKS</span>
   </div>
   <div style="display:flex; justify-content:space-between; align-items:center; padding:4px 0; border-bottom:1px solid #1E2433;">
     <span style="font-size:11px; color:#D1D4DC;">🟢 BUY READY</span>
@@ -743,10 +788,10 @@ with center:
         fig.update_layout(
             template='plotly_dark',
             paper_bgcolor='#131722', plot_bgcolor='#131722',
-            height=510,
+            height=515,
             xaxis_rangeslider_visible=False,
-            legend=dict(orientation='h', y=1.01, x=0, font=dict(size=10)),
-            margin=dict(l=0, r=0, t=5, b=0),
+            legend=dict(orientation='h', y=1.06, x=0, font=dict(size=10)),
+            margin=dict(l=0, r=0, t=28, b=0),
             yaxis=dict(gridcolor='#2A2E39', side='right'),
             yaxis2=dict(gridcolor='#2A2E39', side='right'),
         )
@@ -976,8 +1021,15 @@ with right:
     st.markdown(f"<div style='font-size:12px;font-weight:700;margin-bottom:4px'>{claude_icon}</div>",
                 unsafe_allow_html=True)
 
-    # Check API key from Streamlit secrets
-    api_key = st.secrets.get("ANTHROPIC_API_KEY", "") if hasattr(st, "secrets") else ""
+    # Check API key from Streamlit secrets or environment
+    api_key = ""
+    try:
+        if hasattr(st, "secrets") and "ANTHROPIC_API_KEY" in st.secrets:
+            api_key = st.secrets.get("ANTHROPIC_API_KEY", "")
+    except Exception:
+        api_key = ""
+    if not api_key:
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     claude_ready = CLAUDE_AVAILABLE and bool(api_key)
 
     if not claude_ready:
